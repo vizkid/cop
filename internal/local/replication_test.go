@@ -379,24 +379,12 @@ func TestReplicaCachedOperationsIgnoreStalledTopcop(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	data := []byte("synthetic git payload")
-	for name, request := range map[string]Request{
+	cached := map[string]Request{
 		"deliver": {Action: "deliver", Key: testKey},
-		"sign":    {Action: "sign", Key: signing, Data: data},
+		"sign":    {Action: "sign", Key: signing, Data: []byte("synthetic git payload")},
 		"status":  {Action: "status"},
-	} {
-		done := make(chan Result, 1)
-		go func() { done <- follower.Handle(context.Background(), request) }()
-		select {
-		case result := <-done:
-			if result.Error != "" {
-				t.Fatalf("cached %s failed: %s", name, result.Error)
-			}
-			clear(result.Value)
-		case <-time.After(time.Second):
-			t.Fatalf("cached %s waited on a stalled topcop request", name)
-		}
 	}
+	assertCachedFast(t, follower, cached, "a stalled topcop request")
 	close(release)
 	select {
 	case result := <-stalled:
@@ -406,7 +394,49 @@ func TestReplicaCachedOperationsIgnoreStalledTopcop(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("forwarded request did not finish after approval")
 	}
+	// A snapshot fetch that stalls on the network holds syncMu but not mu.
+	entered, resume := make(chan struct{}), make(chan struct{})
+	dial := b.dial
+	b.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+		close(entered)
+		<-resume
+		return dial(ctx, network, address)
+	}
+	syncDone := make(chan error, 1)
+	go func() { syncDone <- b.sync(context.Background()) }()
+	<-entered
+	assertCachedFast(t, follower, cached, "a stalled snapshot sync")
+	close(resume)
+	if err := <-syncDone; err != nil {
+		t.Fatalf("sync failed after the stall: %v", err)
+	}
 }
+
+func assertCachedFast(t *testing.T, s *Service, requests map[string]Request, blocker string) {
+	t.Helper()
+	for name, request := range requests {
+		done := make(chan Result, 1)
+		go func() { done <- s.Handle(context.Background(), request) }()
+		select {
+		case result := <-done:
+			if result.Error != "" {
+				t.Fatalf("cached %s failed: %s", name, result.Error)
+			}
+			clear(result.Value)
+		case <-time.After(time.Second):
+			t.Fatalf("cached %s waited on %s", name, blocker)
+		}
+	}
+}
+
+// readHook runs once, before the first byte of a peer response is read.
+type readHook struct {
+	net.Conn
+	once *sync.Once
+	hook func()
+}
+
+func (c readHook) Read(p []byte) (int, error) { c.once.Do(c.hook); return c.Conn.Read(p) }
 
 func TestReplicaDiscardsSnapshotFetchedBeforeTopologyChange(t *testing.T) {
 	mesh := newMesh()
@@ -417,13 +447,21 @@ func TestReplicaDiscardsSnapshotFetchedBeforeTopologyChange(t *testing.T) {
 	connectTest(t, b, a, "")
 	authorize(t, leader, testKey)
 	handle(t, leader, "request", testKey)
-	// A topology save lands while the snapshot request is in flight.
+	// A real topology save lands after topcop wrote the snapshot, before the replica reads it.
+	// Production replicas never save after joining, so the test calls saveLocked directly.
 	dial := b.dial
 	b.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-		b.mu.Lock()
-		b.generation++
-		b.mu.Unlock()
-		return dial(ctx, network, address)
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return readHook{conn, new(sync.Once), func() {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			if err := b.saveLocked(); err != nil {
+				t.Error(err)
+			}
+		}}, nil
 	}
 	if b.sync(context.Background()) == nil {
 		t.Fatal("snapshot from an older topology was accepted")
@@ -433,5 +471,33 @@ func TestReplicaDiscardsSnapshotFetchedBeforeTopologyChange(t *testing.T) {
 	follower.mu.Unlock()
 	if cached {
 		t.Fatal("snapshot from an older topology was installed")
+	}
+}
+
+func TestConcurrentConnectsToCompetingGroupsKeepOneTopcop(t *testing.T) {
+	mesh := newMesh()
+	resolve := func(context.Context, Key) ([]byte, error) { return []byte(sentinel), nil }
+	p := mesh.attach(t, newTestService(t, resolve, time.Hour), 1)
+	q := mesh.attach(t, newTestService(t, resolve, time.Hour), 2)
+	x := mesh.attach(t, newTestService(t, resolve, time.Hour), 3)
+	// p and q each lead a group that has already admitted x.
+	connectTest(t, p, x, "local")
+	connectTest(t, q, x, "local")
+	errs := make(chan error, 2)
+	for _, leader := range []*replication{p, q} {
+		go func() { errs <- x.connect(context.Background(), leader.topology.Self.Address, "") }()
+	}
+	var failures int
+	for range 2 {
+		if <-errs != nil {
+			failures++
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("%d of 2 competing connects failed; want exactly 1", failures)
+	}
+	got := x.status().Topcop.ID
+	if got != p.topology.Self.ID && got != q.topology.Self.ID {
+		t.Fatalf("topcop %q is neither competing leader", got)
 	}
 }

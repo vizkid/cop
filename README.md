@@ -328,7 +328,7 @@ Requests for missing keys and project mutations go to topcop. Expiry-triggered r
 Signing happens locally from the replicated key, while read and export commands still refuse signing-only identities.
 
 A disconnected replica can use its existing unexpired cache. It cannot refill or change shared authorizations until topcop returns.
-Cached delivery, signing, and status on a replica never wait for topcop requests or snapshot syncs in progress.
+Cached delivery, signing, and status on a replica do not wait for network calls to topcop.
 Clear and revoke take effect on other replicas after their next successful sync.
 An offline replica can retain previously authorized keys until their original expiry; immediate offline revocation is impossible.
 Restarted replicas recover topology and authorizations, then refill memory from topcop without invoking a local resolver.
