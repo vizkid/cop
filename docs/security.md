@@ -71,7 +71,7 @@ cop reserves process-control names and the `OP_`, `COP_`, `REX_`, `LD_`, and `DY
 
 The signing endpoint checks authorization for every signature.
 It does not limit repositories, destinations, or spending.
-`--purpose` sets Git options for the child to prevent mistakes. It does not limit what an SSH agent request can sign.
+`--sign` and `--auth` set Git options for the child to prevent mistakes. They do not limit what an SSH agent request can sign.
 See the [signing cache design](signing-cache.md).
 
 ## Replication

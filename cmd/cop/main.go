@@ -38,7 +38,7 @@ Usage:
   cop run     [--project NAME] --account ACCOUNT --ref op://vault/item/field --env NAME -- COMMAND [ARGS...]
   cop clear   [--project NAME]
   cop status
-  cop ssh-run --purpose sign|auth [--project NAME] --account ACCOUNT --ref REF --public-key FILE -- COMMAND [ARGS...]
+  cop ssh-run --sign|--auth [--project NAME] --account ACCOUNT --ref REF --public-key FILE -- COMMAND [ARGS...]
   cop version
 
 Set COP_HOME to an absolute private directory to override the user config directory.

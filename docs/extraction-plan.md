@@ -99,4 +99,4 @@ Old per-read/signature quotas and Commander renewal flows are excluded.
 
 The inspected source had no tracked source license; its NOTICE covered artwork.
 No source, fixtures, artwork, or private documents were imported. The local milestone consists of independent new code.
-The cop license remains undecided. Future source copying requires explicit permission and compatible licensing first.
+cop is MIT-licensed. Future source copying requires explicit permission and compatible licensing first.

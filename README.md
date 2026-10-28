@@ -105,12 +105,12 @@ Outside Rex, add `--project NAME` to each command.
 
 ```sh
 cop allow --account "$ACCOUNT" --ref "$SIGN_REF" --use ssh-sign --public-key "$SIGN_PUB"
-cop ssh-run --purpose sign --account "$ACCOUNT" --ref "$SIGN_REF" --public-key "$SIGN_PUB" -- git commit -m "Change"
-cop ssh-run --purpose auth --account "$ACCOUNT" --ref "$AUTH_REF" --public-key "$AUTH_PUB" -- git push --dry-run origin main
+cop ssh-run --sign --account "$ACCOUNT" --ref "$SIGN_REF" --public-key "$SIGN_PUB" -- git commit -m "Change"
+cop ssh-run --auth --account "$ACCOUNT" --ref "$AUTH_REF" --public-key "$AUTH_PUB" -- git push --dry-run origin main
 ```
 
-- `--purpose sign` sets up commit signing for the child and turns off Git's SSH transport.
-- `--purpose auth` sets up SSH transport and turns off signing. Allow the authentication key separately.
+- `--sign` sets up commit signing for the child and turns off Git's SSH transport.
+- `--auth` sets up SSH transport and turns off signing. Allow the authentication key separately.
 - `ssh-run` gives the child a private agent socket that closes when the child exits. It leaves your global Git settings alone.
 - It runs `ssh -F /dev/null`, so your SSH config and aliases do not apply. Use a direct SSH remote, not HTTPS. Host key checks stay on.
 - `cop run` and other read commands refuse signing keys.
@@ -180,4 +180,4 @@ See [Security model and limits](docs/security.md) before you rely on cop.
 - [Desktop SDK evaluation](docs/desktop-sdk-evaluation.md)
 - [`op read` reference](https://developer.1password.com/docs/cli/reference/commands/read/)
 
-The license is not chosen yet.
+cop is released under the [MIT License](LICENSE).

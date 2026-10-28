@@ -46,16 +46,16 @@ Use `cop status` or maintained configuration to find the authorized public ident
 
 ```sh
 cop allow --account "$ACCOUNT" --ref "$SIGN_REF" --use ssh-sign --public-key "$SIGN_PUBLIC_KEY"
-cop ssh-run --purpose sign --account "$ACCOUNT" --ref "$SIGN_REF" --public-key "$SIGN_PUBLIC_KEY" -- git commit -m "Change"
+cop ssh-run --sign --account "$ACCOUNT" --ref "$SIGN_REF" --public-key "$SIGN_PUBLIC_KEY" -- git commit -m "Change"
 
 cop allow --account "$ACCOUNT" --ref "$AUTH_REF" --use ssh-sign --public-key "$AUTH_PUBLIC_KEY"
-cop ssh-run --purpose auth --account "$ACCOUNT" --ref "$AUTH_REF" --public-key "$AUTH_PUBLIC_KEY" -- git push origin main
+cop ssh-run --auth --account "$ACCOUNT" --ref "$AUTH_REF" --public-key "$AUTH_PUBLIC_KEY" -- git push origin main
 ```
 
 Run `allow` only when adding that exact authorization is within the user's task.
 For existing authorizations, use `ssh-run` directly.
-`sign` configures commit signing and disables Git SSH transport. `auth` configures SSH transport and refuses commit signing.
-Use separate invocations for commit and push; do not wrap both in one purpose.
+`--sign` configures commit signing and disables Git SSH transport. `--auth` configures SSH transport and refuses commit signing.
+Use separate invocations for commit and push; do not combine them in one invocation.
 A plain `git push` can use another SSH agent and trigger unrelated 1Password key prompts.
 The wrapper ignores personal SSH configuration. Use a direct SSH remote, not an SSH alias or HTTPS URL.
 Private signing keys stay behind cop's signing interface; read and export commands refuse them.

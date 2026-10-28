@@ -22,9 +22,9 @@ Each signature rechecks authorization and expiry while holding the cache lock.
 
 `allow`, `revoke`, and `request` accept `--use ssh-sign --public-key FILE`.
 `cop ssh-run` wraps a child with a temporary protected SSH-agent socket for one authorized identity.
-`--purpose sign` selects a commit-signing identity and `ssh-keygen`; Git SSH transport is disabled.
-`--purpose auth` selects an authentication identity for SSH transport; Git commit signing is disabled.
-The purpose is mandatory. Each invocation selects exactly one identity.
+`--sign` selects a commit-signing identity and `ssh-keygen`; Git SSH transport is disabled.
+`--auth` selects an authentication identity for SSH transport; Git commit signing is disabled.
+Pass exactly one of `--sign` or `--auth`. Each invocation selects one identity.
 Both use `ssh-sign` storage and require separate allowlist entries when references or public keys differ.
 These child Git defaults prevent accidental identity reuse; they are not cryptographic restrictions on agent payloads.
 The wrapper uses the session project inside Rex, or an explicit standalone project outside Rex.
@@ -62,4 +62,4 @@ Cross-compilation does not establish Linux runtime behavior. Remote loading and 
 Penfold was inspected read-only to understand its memory-only signing model. No implementation source was copied.
 Use the supported Go SSH implementation in `golang.org/x/crypto/ssh` for parsing and agent protocol handling.
 Its BSD-style license requires retaining the upstream notice when distributing binaries.
-Cop's project license remains undecided.
+cop itself is MIT-licensed.
