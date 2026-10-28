@@ -16,6 +16,9 @@ import (
 	"github.com/vizkid/cop/internal/local"
 )
 
+// version is set by release builds: go build -ldflags "-X main.version=v0.1.0".
+var version = "dev"
+
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--internal-sdk-session" {
 		desktop.RunSession()
@@ -36,7 +39,7 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
-		fmt.Println("copd dev")
+		fmt.Println("copd", version)
 		return nil
 	}
 	f := flag.NewFlagSet("copd", flag.ContinueOnError)

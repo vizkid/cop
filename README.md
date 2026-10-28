@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/cop.png" alt="cop badge: a steel shield with a keyhole" width="160"></p>
+
 # cop
 
 cop (cached one password) caches explicitly requested 1Password fields for local child processes.
@@ -38,6 +40,25 @@ make build
 Tests need no vault, credentials, network service, or running cop service.
 Lifecycle and concurrency checks exercise both fake `op` and fake SDK workers.
 The SDK module dependencies must be available for building and checking the worker.
+
+## Install
+
+`cop` starts `copd` from its own directory, so install both binaries together.
+`make install` copies them to `~/.local/bin`. Set `PREFIX` to choose another location.
+
+```sh
+make install                  # or: make install PREFIX=/usr/local
+cop version
+```
+
+Builds take their version from `git describe`; a plain `go build` reports `dev`.
+Make sure the install directory is on your `PATH`.
+Keep `copd` running under your service manager, such as a launchd agent or a systemd user unit.
+Run `cop setup` afterwards to install the agent skill.
+
+cop's socket lives at `COP_HOME/service.sock`. Unix sockets limit that path to about 100 bytes.
+If `copd` reports "cannot bind local socket", choose a shorter `COP_HOME`.
+`COP_HOME` must be a real directory, not a symlink, that only you can access.
 
 ## Agent skill
 

@@ -19,6 +19,9 @@ import (
 	"github.com/vizkid/cop/internal/rexcontext"
 )
 
+// version is set by release builds: go build -ldflags "-X main.version=v0.1.0".
+var version = "dev"
+
 const usage = `cop (cached one password)
 
 Usage:
@@ -61,7 +64,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) == 1 && (args[0] == "version" || args[0] == "--version") {
-		fmt.Println("cop dev")
+		fmt.Println("cop", version)
 		return nil
 	}
 	if args[0] == "skill" {
