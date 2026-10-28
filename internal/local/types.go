@@ -25,6 +25,8 @@ type Key struct {
 
 type Request struct {
 	Action string `json:"action"`
+	Peer   string `json:"peer,omitempty"`
+	Topcop string `json:"topcop,omitempty"`
 	Data   []byte `json:"data,omitempty"`
 	Key
 }
@@ -51,6 +53,7 @@ type Cached struct {
 }
 
 type Status struct {
+	Network  *NetworkStatus   `json:"network,omitempty"`
 	Projects map[string][]Key `json:"projects"`
 	Requests []JobStatus      `json:"requests"`
 	Cache    []Cached         `json:"cache"`

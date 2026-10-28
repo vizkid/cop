@@ -15,5 +15,7 @@ cop is a standalone tool for 1Password users. Read the README and extraction pro
 
 The local milestone uses trusted configuration and delegates authentication to 1Password.
 Do not require custom approval keys or signed policies for local caching.
-Networking, multi-host sync, action/spend enforcement, and native UI remain deferred.
+Tailscale replication uses explicit initial topcop selection and inherited group authority.
+Project keys replicate by default. Preserve expiry and signing-only restrictions across peers.
+Automatic election, action/spend enforcement, and native UI remain deferred.
 Read the README for the same-user trust boundary and temporary-memory limitations.

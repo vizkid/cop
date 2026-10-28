@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/vizkid/cop/internal/local"
 	"github.com/vizkid/cop/internal/rexcontext"
@@ -23,7 +22,11 @@ import (
 const usage = `cop (cached one password)
 
 Usage:
-  cop serve [--resolver op|sdk] [--op PATH] [--sdk-worker PATH] [--ttl 5m] [--op-timeout 2m]
+  cop setup
+  cop skill show
+  cop skill install [--root AGENT_HOME]
+  cop connect [--topcop local|remote] TAILSCALE_IP:PORT
+  cop serve [OPTIONS] (compatibility alias for copd)
   cop context [--project NAME]
   cop project create [NAME]
   cop allow   [--project NAME] --account ACCOUNT --ref op://vault/item/field
@@ -61,6 +64,15 @@ func run(args []string) error {
 		fmt.Println("cop dev")
 		return nil
 	}
+	if args[0] == "skill" {
+		return skillCommand(args[1:])
+	}
+	if args[0] == "setup" {
+		if len(args) != 1 {
+			return errors.New("usage: cop setup")
+		}
+		return skillCommand([]string{"install"})
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if args[0] == "context" {
@@ -96,40 +108,26 @@ func run(args []string) error {
 		return sshRun(ctx, home, args[1:])
 	}
 	if args[0] == "serve" {
-		f := flags("serve")
-		op := f.String("op", "op", "op executable")
-		backend := f.String("resolver", "op", "op or sdk")
-		worker := f.String("sdk-worker", "", "SDK worker executable; defaults beside cop")
-		ttl := f.Duration("ttl", 5*time.Minute, "cache lifetime")
-		timeout := f.Duration("op-timeout", 2*time.Minute, "queue and resolution deadline")
-		if f.Parse(args[1:]) != nil || f.NArg() != 0 {
-			return errors.New("invalid serve arguments; run cop --help")
-		}
-		if err := local.DisableCoreDumps(); err != nil {
-			return err
-		}
-		var resolver local.Resolver
-		var err error
-		switch *backend {
-		case "op":
-			resolver, err = local.OP(*op)
-		case "sdk":
-			if *worker == "" {
-				exe, e := os.Executable()
-				if e != nil {
-					return errors.New("cannot locate SDK worker")
-				}
-				*worker = filepath.Join(filepath.Dir(exe), "cop-sdk-worker")
-			}
-			resolver, err = local.SDK(*worker)
-		default:
-			return errors.New("resolver must be op or sdk")
-		}
+		exe, err := os.Executable()
 		if err != nil {
 			return err
 		}
-		return local.Serve(ctx, home, resolver, *ttl, *timeout, func() { fmt.Println("cop: local service ready") })
+		daemon := filepath.Join(filepath.Dir(exe), "copd")
+		return syscall.Exec(daemon, append([]string{daemon}, args[1:]...), os.Environ())
 	}
+	if args[0] == "connect" {
+		f := flags("connect")
+		topcop := f.String("topcop", "", "local for the first topcop; otherwise inherit")
+		if f.Parse(args[1:]) != nil || f.NArg() != 1 {
+			return errors.New("usage: cop connect [--topcop local|remote] TAILSCALE_IP:PORT")
+		}
+		result, err := local.Call(ctx, home, local.Request{Action: "connect", Peer: f.Arg(0), Topcop: *topcop})
+		if err == nil {
+			fmt.Println(result.Status)
+		}
+		return err
+	}
+
 	if args[0] == "project" {
 		if (len(args) != 2 && len(args) != 3) || args[1] != "create" {
 			return errors.New("usage: cop project create [NAME]")

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func Serve(ctx context.Context, home string, resolver Resolver, ttl, timeout time.Duration, ready func()) error {
+func Serve(ctx context.Context, home string, resolver Resolver, ttl, timeout time.Duration, ready func(), options ...ReplicationOptions) error {
 	if err := PrepareHome(home); err != nil {
 		return err
 	}
@@ -43,11 +43,28 @@ func Serve(ctx context.Context, home string, resolver Resolver, ttl, timeout tim
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("cannot inspect socket path")
 	}
-	s, err := New(home, resolver, ttl, timeout)
+	var batch BatchResolver
+	if len(options) > 0 {
+		batch = options[0].Batch
+	}
+	s, err := New(home, resolver, ttl, timeout, batch)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
+	if len(options) > 0 && options[0].Identity != nil {
+		network, e := startReplication(s, options[0])
+		if e != nil {
+			return e
+		}
+		s.network = network
+		defer network.close()
+		s.replicaMode = network.replica()
+		s.wg.Add(1)
+		go func() { defer s.wg.Done(); network.poll() }()
+	} else if _, e := os.Lstat(filepath.Join(home, "network.json")); !errors.Is(e, os.ErrNotExist) {
+		return errors.New("network configuration exists; start copd with --tailscale")
+	}
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		return errors.New("cannot bind local socket; check cop home and Unix path length")
@@ -89,6 +106,9 @@ func Serve(ctx context.Context, home string, resolver Resolver, ttl, timeout tim
 		case <-done:
 		}
 	}()
+	if !s.replicaMode {
+		s.preload()
+	}
 	if ready != nil {
 		ready()
 	}

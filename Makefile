@@ -2,7 +2,7 @@
 
 build:
 	go build -o bin/cop ./cmd/cop
-	cd experiments/desktop-sdk && go build -o ../../bin/cop-sdk-worker ./worker
+	go build -o bin/copd ./cmd/copd
 
 check:
 	@test -z "$$(gofmt -l cmd internal experiments/desktop-sdk)" || { echo 'Run gofmt on Go source files'; exit 1; }

@@ -41,6 +41,10 @@ func newHarness(t *testing.T) *harness {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
 	}
+	buildDaemon := exec.Command("go", "build", "-race", "-o", filepath.Join(root, "copd"), "../copd")
+	if out, err := buildDaemon.CombinedOutput(); err != nil {
+		t.Fatalf("build daemon: %v: %s", err, out)
+	}
 	script := `#!/bin/sh
 if [ "$1" != read ] || [ "$2" != --account ] || [ "$4" != --no-newline ] || [ "$5" != --cache=false ]; then exit 90; fi
 if [ "$OP_DEBUG" != false ] || [ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]; then exit 91; fi
@@ -258,8 +262,12 @@ func localMilestone(t *testing.T, backend string) {
 	// Process startup cannot recover a secret from disk.
 	h.stop()
 	h.start()
-	if len(h.view().Cache) != 0 {
-		t.Fatal("restart retained cache")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.view().Cache) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.count() != 4 || len(h.view().Cache) != 1 {
+		t.Fatal("restart did not preload from resolver")
 	}
 	h.ok(args...)
 	if h.count() != 4 {
@@ -273,8 +281,12 @@ func localMilestone(t *testing.T, backend string) {
 	h.cancel()
 	h.command = nil
 	h.start()
-	if len(h.view().Cache) != 0 {
-		t.Fatal("crash retained cache")
+	deadline = time.Now().Add(5 * time.Second)
+	for len(h.view().Cache) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.count() != 5 || len(h.view().Cache) != 1 {
+		t.Fatal("crash recovery did not preload from resolver")
 	}
 	h.ok(args...)
 	if h.count() != 5 {

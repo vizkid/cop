@@ -14,14 +14,19 @@ Identical concurrent requests within one project share a resolution.
 Cache entries remain separate across projects and accounts.
 
 Values live only in process memory. The service stores allowlists on disk, but never stores credential values or encrypted recovery copies.
-Restart preserves allowlists and starts with an empty cache.
+Standalone and topcop restart preserve allowlists and reload every authorized key through 1Password.
+Replicas reload from topcop instead.
+Startup loads readable and signing-only keys through a serialized queue.
+The SDK groups each project's keys by account and calls `ResolveAll` once per group, using one authenticated client. Use `cop status` to inspect active, queued, resolved, and failed loads.
+The socket remains available during loading. Requests for the same key share its startup load.
+Failed loads remain uncached; other loads continue. Clear and revoke cancel matching startup loads.
 
 ## Build and check
 
 Install Go 1.26.10 or later, a C compiler, and Make.
-The service uses Go and the supported Go SSH library. The separate SDK worker has pinned dependencies and requires CGO.
-`make build` builds both binaries; keep `cop-sdk-worker` beside `cop` when installing.
-The SDK worker loads the native library from the installed 1Password desktop app.
+The service uses Go and the supported Go SSH library. The daemon includes the SDK integration with pinned dependencies and requires CGO.
+`make build` builds `cop` (CLI) and `copd` (daemon). Install both binaries together.
+An internal `copd` subprocess loads the native library from the installed 1Password desktop app.
 
 ```sh
 make check
@@ -34,6 +39,17 @@ Tests need no vault, credentials, network service, or running cop service.
 Lifecycle and concurrency checks exercise both fake `op` and fake SDK workers.
 The SDK module dependencies must be available for building and checking the worker.
 
+## Agent skill
+
+Run `cop setup` to install the bundled skill in existing Codex and Claude configuration directories.
+It discovers default homes, recognized named profiles, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR`.
+Use `cop skill install --root /path/to/agent-home` for a specific profile.
+`cop skill show` prints the bundled guide without contacting the daemon or 1Password.
+
+The installer preserves symlinked skills and files changed outside cop's installer.
+Run setup again after upgrading cop. Agent sessions may need to restart before they discover the new skill.
+Setup changes no agent hooks, MCP registrations, Git settings, or credential authorizations.
+
 ## Standalone use
 
 The following commands select a project explicitly outside Rex. Inside Rex, use the session defaults described below.
@@ -45,7 +61,7 @@ Terminal password entry is not supported inside the service; authenticate separa
 Start the desktop SDK service in one terminal:
 
 ```sh
-./bin/cop serve --resolver sdk
+./bin/copd --resolver sdk
 ```
 
 Enable SDK integration in the 1Password desktop app's Developer settings.
@@ -56,7 +72,7 @@ Locking 1Password does not clear values already cached by cop. Those values expi
 The `op` adapter remains the default for compatibility:
 
 ```sh
-./bin/cop serve
+./bin/copd
 ```
 
 In another terminal, create an empty project:
@@ -103,7 +119,7 @@ Remove one authorization and its cached value:
 
 Clear and revoke cancel matching queued or active resolutions. Late results cannot refill the cache.
 A value already delivered to a process cannot be recalled.
-Stop the service with Control-C. After restart, the next authorized request resolves through the selected adapter again.
+Stop the service with Control-C. After restart, the service automatically resolves saved authorizations through the selected adapter again.
 
 ## Rex session context
 
@@ -161,7 +177,7 @@ The cop adapter invokes the installed Rex CLI; it adds no host transport or netw
 When all three variables are absent, `cop context` reports `standalone` without invoking Rex.
 `cop context --project NAME` can inspect an explicit standalone project selection without a running cop service.
 Ordinary standalone key operations continue to require an explicit project.
-`serve` and the service-wide `status` command remain independent of Rex discovery.
+`copd` and the service-wide `status` command remain independent of Rex discovery.
 
 Environment variables and same-user CLI lookups provide context, not tamper-proof authentication.
 These IDs add no host authorization, cryptographic keys, session credentials, or changes to service ownership.
@@ -200,7 +216,7 @@ To revoke a signing authorization, use the same account, reference, use, and pub
 
 The signature endpoint verifies authority for each signature. It does not enforce repository names, destinations, or spending limits.
 The same-user trust boundary still applies. Key parsing and signing create transient heap copies beyond the locked cache.
-RSA, encrypted private-key files, and topcop distribution are not implemented.
+RSA and encrypted private-key files are not implemented.
 See the [signing-cache specification](docs/signing-cache.md).
 
 ## Configuration and limits
@@ -217,17 +233,25 @@ A lock prevents two services from using the same home; restart removes a stale s
 
 | Setting | Default | Bound |
 | --- | --- | --- |
-| `serve --ttl` | `5m` | Positive, at most `1h`; hits do not extend expiry |
-| `serve --op-timeout` | `2m` | Positive, at most `5m`; includes queue time |
-| `serve --op` | `op` from PATH | Trusted executable; selected once at startup |
-| `serve --resolver` | `op` | `op` or `sdk` |
-| `serve --sdk-worker` | `cop-sdk-worker` beside `cop` | Trusted executable; selected once at startup |
-| Pending resolutions | None | 64 distinct requests |
+| `copd --ttl` | `168h` (seven days) | Positive Go duration; hits do not extend expiry |
+| `copd --op-timeout` | `2m` | Positive, at most `5m`; startup and refill loads count from activation; ordinary requests include queue time |
+| `copd --op` | `op` from PATH | Trusted executable; selected once at startup |
+| `copd --resolver` | `op` | `op`, `sdk`, or `none` for a replica without a local resolver |
+| `copd --tailscale` | Disabled | Enable replication on the local Tailscale IPv4 address |
+| `copd --port` | `8787` | Tailscale listener port |
+| Pending resolutions | None | 64 distinct ordinary requests; startup and refills queue saved authorizations |
 | Cache entries | None | 128 entries, at most 64 KiB each |
-| Request history | Empty on restart | Last 128 records, metadata only |
+| Request history | Empty on restart | Last 128 records plus unfinished startup and refill loads, metadata only |
 
 Expired values are refused immediately and erased by the next idle cleanup tick, within one second.
 The lifetime uses Go's monotonic clock. A cache hit never contacts 1Password.
+Set a different lifetime with `copd --ttl 336h` (fourteen days).
+Expiry alone does not contact 1Password. The next request for an expired key refills every authorized key in that project.
+The refill clears that project's remaining cached values and serializes resolutions through 1Password.
+Other projects retain their own cached or expired state until requested. Concurrent requests share the refill jobs.
+Inside Rex, the project equals the session label; all panes share that project. Standalone usage selects the project explicitly.
+1Password controls authentication and prompts; a refill does not force a new biometric prompt when 1Password still grants access.
+Failed loads remain uncached and can be retried. Clear and revoke cancel matching refill jobs.
 An offline hit works until expiry; a miss still needs normal 1Password access.
 Disconnected CLI requests remain accepted work until completion, invalidation, or their original deadline.
 
@@ -261,13 +285,69 @@ Status and configuration contain project names, account selectors, and reference
 The SDK path passed a live test with one explicitly authorized reference: resolution, cache reuse, child delivery, clear, expiry, and restart.
 The test printed no value, length, or hash. Multi-account routing and all desktop approval states remain unverified.
 SDK failures use fixed messages. Worker stdout and stderr are discarded; values travel through a private inherited pipe.
-Each miss starts a separate SDK worker, avoiding shared account state and allowing process-level deadline enforcement.
+Ordinary misses, startup loads, and expiry refills reuse an account-bound worker across project batches.
+A refill worker retains one SDK client per account and performs one bulk resolution per project batch.
+Workers exit after nine idle minutes, on timeout, or when the daemon stops. Cop sends no authorization keepalive requests.
+1Password can reuse an existing authorization or request approval. Cop cannot guarantee a biometric prompt count.
+Separate workers isolate account state and enforce deadlines at the process level.
+1Password authorization is process-bound and expires after ten idle minutes or when the account locks.
+SDK sessions and temporary result copies remain in worker memory; the memory-erasure limitations above also apply to these workers.
+
+## Tailscale replication
+
+Start `copd --resolver sdk --tailscale` on the machine with desktop 1Password access.
+Start `copd --resolver none --tailscale` on a replica that needs no local vault access.
+Both machines need a running Tailscale client and permission to reach the configured TCP port.
+The listener binds only to the local Tailscale address. Standalone `copd` has no network listener.
+
+Set `TOPCOP` and `REPLICA` to their exact Tailscale IP addresses with port, such as `100.64.0.10:8787`.
+On the chosen topcop, explicitly admit the replica:
+
+```sh
+cop connect --topcop local "$REPLICA"
+```
+
+On the replica, connect back to inherit the selected topcop:
+
+```sh
+cop connect "$TOPCOP"
+cop status
+```
+
+For each additional cop, run `cop connect "$NEW_COP"` on any existing member.
+Then run `cop connect "$EXISTING_COP"` on the new cop. The new cop inherits the group's topcop.
+Admission requires a local CLI action on an existing member; sharing the tailnet alone grants no credential access.
+Every enrolled member can admit peers and change the shared project allowlist.
+Groups with conflicting topcops are refused. Automatic election, failover, and group merging are not implemented.
+
+All project authorizations and cached keys replicate by default, including signing-only keys.
+Topcop's allowlist replaces the joining cop's local allowlist. Treat joining as adoption of the group's credential authority.
+Only metadata is stored in `network.json` and `projects.json`; replicated values remain in locked memory.
+Replicas pull snapshots every two seconds. Expiry never extends during transfer.
+Requests for missing keys and project mutations go to topcop. Expiry-triggered refills remain project-scoped.
+Signing happens locally from the replicated key, while read and export commands still refuse signing-only identities.
+
+A disconnected replica can use its existing unexpired cache. It cannot refill or change shared authorizations until topcop returns.
+Cached delivery, signing, and status on a replica never wait for topcop requests or snapshot syncs in progress.
+Clear and revoke take effect on other replicas after their next successful sync.
+An offline replica can retain previously authorized keys until their original expiry; immediate offline revocation is impossible.
+Restarted replicas recover topology and authorizations, then refill memory from topcop without invoking a local resolver.
+Restarted topcop reloads authorized keys through 1Password. No secret recovery copies exist on disk.
+
+Transport uses Tailscale encryption, direct Tailscale addresses, and stable node IDs checked through the installed Tailscale CLI.
+Cop does not create Tailscale identities, modify ACLs, enable Funnel, or expose the local CLI API over TCP.
+Peer access is machine-level trust, not isolation between operating-system users on an enrolled machine.
+Tailscale administrators, trusted cop operators, and processes with equivalent machine access remain within that trust boundary.
+Snapshot encoding and transport create temporary heap copies, subject to the memory limits described above.
+
+`cop serve` remains a compatibility alias that executes the adjacent `copd` binary.
+The SDK subprocess is an internal daemon mode, not a third installed command.
 
 ## Later work and licensing
 
 See the [scope and implementation plan](docs/extraction-plan.md).
 The [desktop Go SDK evaluation](docs/desktop-sdk-evaluation.md) records the probe, source findings, and subsequent cache integration.
-Networking, multi-host recovery, action/spending enforcement, and native UI are deferred.
+Tailscale replication is implemented. Automatic topcop failover, action/spending enforcement, and native UI remain deferred.
 Varlock support is outside scope.
 
 This milestone is independent new code. No reference source, fixtures, or artwork were copied.

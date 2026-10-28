@@ -10,7 +10,7 @@ Trusted local configuration is sufficient for local caching. 1Password owns auth
 
 - Support `op` users, without Varlock or a generic provider framework.
 - Create empty projects and authorize exact requested account/reference pairs incrementally.
-- Cache values for the service process lifetime, with bounded expiry and explicit invalidation.
+- Cache values in service memory with configurable expiry, defaulting to seven days, and explicit invalidation.
 - Serialize interactive resolutions so every prompt has attributable request metadata.
 - Expose queued, active, resolved, and failed states without secret values.
 - Deliver values only through an explicitly requested child environment.
@@ -34,6 +34,11 @@ It requires no Penfold, Rex, provider-account harness, or repository role model.
 | Status | Project allowlists, request states, failure reasons, and cache expiry; no credential values |
 
 The adapters rely on supported 1Password commands and the desktop Go SDK. It does not reimplement the vault or bypass authentication.
+Startup queues all saved authorizations while the socket remains available.
+SDK startup and expiry refills batch references by project and account, with one client and one bulk call per group.
+Failures do not stop other loads. Clear and revoke cancel matching startup loads.
+A request for an expired key refills its project, including keys that have not expired.
+Other projects retain their own cached or expired state. 1Password controls authentication during each resolution.
 A failed resolution is not cached. A later request can retry.
 A cache hit can work offline until its existing expiry; a restart cannot recover values without resolving again.
 
@@ -52,7 +57,7 @@ The test suite covers:
 - Private socket/configuration permissions and refusal of duplicate service startup.
 - Child environment delivery and absence of values from cop status, service logs, and persistent files.
 
-`make check` runs vet and race-enabled tests. `make build` produces the CLI.
+`make check` runs vet and race-enabled tests. `make build` produces the `cop` CLI and `copd` daemon.
 Cross-compilation checks portability; runtime tests establish behavior only on the host where they run.
 
 ## Rex context extension
@@ -73,8 +78,8 @@ The installed schema was checked through `server.status`, `session.describe_bloc
 
 ## Deferred work
 
-1. Add authenticated multi-host distribution and recovery after the local mechanism is proven.
-   Decide host enrollment, authority, replay protection, and revocation before implementing networking.
+1. Extend Tailscale replication with explicit authority migration and operational recovery after multi-host validation.
+   Initial selection, inherited topcop authority, default project replication, and offline cache use are implemented.
 2. Extend the implemented Ed25519 signing-only cache to additional algorithms after review.
    The separate signing endpoint never returns private-key material. See [the signing spec](signing-cache.md).
 3. Define action/spending charters independently of credential allowlists.
@@ -82,7 +87,7 @@ The installed schema was checked through `server.status`, `session.describe_bloc
 4. Add an optional menu-bar companion that presents request metadata during 1Password prompts.
    The CLI and service remain usable without that companion.
 
-No Tailscale integration, network sync, action enforcement, spending enforcement, or native UI belongs to this milestone.
+Tailscale replication now extends this milestone. Action enforcement, spending enforcement, and native UI remain deferred.
 Future signed authority must not become a retroactive prerequisite for the ratified local flow.
 
 ## Reference and licensing record

@@ -19,33 +19,38 @@ type entry struct {
 
 type job struct {
 	JobStatus
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
+	done    chan struct{}
+	startup bool
 }
 
 type Service struct {
-	mu       sync.Mutex
-	home     string
-	config   config
-	resolve  Resolver
-	ttl      time.Duration
-	timeout  time.Duration
-	cache    map[Key]entry
-	inflight map[Key]*job
-	queue    []*job
-	history  []*job
-	nextID   uint64
-	wake     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	closed   bool
+	mu          sync.Mutex
+	home        string
+	config      config
+	resolve     Resolver
+	batch       BatchResolver
+	ttl         time.Duration
+	timeout     time.Duration
+	cache       map[Key]entry
+	expired     map[Key]bool
+	inflight    map[Key]*job
+	queue       []*job
+	history     []*job
+	nextID      uint64
+	wake        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	closed      bool
+	network     *replication
+	replicaMode bool
 }
 
-func New(home string, resolver Resolver, ttl, timeout time.Duration) (*Service, error) {
-	if resolver == nil || ttl <= 0 || ttl > time.Hour || timeout <= 0 || timeout > 5*time.Minute {
-		return nil, errors.New("TTL must be positive and at most 1h; op timeout must be positive and at most 5m")
+func New(home string, resolver Resolver, ttl, timeout time.Duration, batches ...BatchResolver) (*Service, error) {
+	if resolver == nil || ttl <= 0 || timeout <= 0 || timeout > 5*time.Minute {
+		return nil, errors.New("TTL must be positive; op timeout must be positive and at most 5m")
 	}
 	c, err := loadConfig(home)
 	if err != nil {
@@ -53,11 +58,49 @@ func New(home string, resolver Resolver, ttl, timeout time.Duration) (*Service, 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{home: home, config: c, resolve: resolver, ttl: ttl, timeout: timeout,
-		cache: map[Key]entry{}, inflight: map[Key]*job{}, wake: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+		cache: map[Key]entry{}, expired: map[Key]bool{}, inflight: map[Key]*job{}, wake: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	if len(batches) > 0 {
+		s.batch = batches[0]
+	}
 	s.wg.Add(2)
 	go s.work()
 	go s.expire()
 	return s, nil
+}
+
+// preload queues saved authorizations before the socket accepts requests.
+func (s *Service) preload() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queueAuthorizedLocked("")
+}
+
+// queueAuthorizedLocked selects one project, or all projects at startup.
+func (s *Service) queueAuthorizedLocked(selected string) {
+	projects := make([]string, 0, len(s.config.Projects))
+	for project := range s.config.Projects {
+		if selected == "" || selected == project {
+			projects = append(projects, project)
+		}
+	}
+	sort.Strings(projects)
+	for _, project := range projects {
+		for _, k := range s.config.Projects[project] {
+			if s.inflight[k] != nil {
+				continue
+			}
+			s.nextID++
+			ctx, cancel := context.WithCancel(s.ctx)
+			j := &job{JobStatus: JobStatus{ID: s.nextID, Key: k, State: "queued", Created: time.Now().UTC()}, ctx: ctx, cancel: cancel, done: make(chan struct{}), startup: true}
+			s.inflight[k] = j
+			s.queue = append(s.queue, j)
+			s.history = append(s.history, j)
+		}
+	}
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Service) Close() {
@@ -72,6 +115,31 @@ func (s *Service) Close() {
 func (s *Service) allowedLocked(k Key) bool { return slices.Contains(s.config.Projects[k.Project], k) }
 
 func (s *Service) Handle(ctx context.Context, r Request) Result {
+	if r.Action == "connect" {
+		if s.network == nil {
+			return Result{Error: "start copd with --tailscale to connect peers"}
+		}
+		if err := s.network.connect(ctx, r.Peer, r.Topcop); err != nil {
+			return Result{Error: err.Error()}
+		}
+		return Result{Status: "connected; joining peer must connect back to inherit topcop"}
+	}
+	if s.network != nil {
+		if r.Action == "status" {
+			result := s.handleLocal(ctx, r)
+			if result.View != nil {
+				result.View.Network = s.network.status()
+			}
+			return result
+		}
+		if s.network.replica() {
+			return s.network.forward(ctx, r)
+		}
+	}
+	return s.handleLocal(ctx, r)
+}
+
+func (s *Service) handleLocal(ctx context.Context, r Request) Result {
 	if r.Action == "sign" {
 		return s.sign(ctx, r)
 	}
@@ -151,6 +219,30 @@ func (s *Service) fetch(ctx context.Context, k Key, deliver bool) Result {
 		s.mu.Unlock()
 		return Result{Error: "reference is not authorized for this project and account"}
 	}
+	if s.replicaMode {
+		if e, ok := s.cache[k]; ok {
+			r := delivery(e, deliver, "cached")
+			s.mu.Unlock()
+			return r
+		}
+		s.mu.Unlock()
+		return Result{Error: "replica cache unavailable; request a topcop refill"}
+	}
+	if s.expired[k] {
+		// Refill only this project; concurrent requests join the same jobs.
+		for key, e := range s.cache {
+			if key.Project == k.Project {
+				e.value.destroy()
+				delete(s.cache, key)
+			}
+		}
+		for key := range s.expired {
+			if key.Project == k.Project {
+				delete(s.expired, key)
+			}
+		}
+		s.queueAuthorizedLocked(k.Project)
+	}
 	if e, ok := s.cache[k]; ok {
 		r := delivery(e, deliver, "cached")
 		s.mu.Unlock()
@@ -214,9 +306,15 @@ func (s *Service) finishLocked(j *job, reason string) {
 		delete(s.inflight, j.Key)
 	}
 	close(j.done)
+	s.trimHistoryLocked()
 }
 
 func (s *Service) invalidateLocked(match func(Key) bool) {
+	for k := range s.expired {
+		if match(k) {
+			delete(s.expired, k)
+		}
+	}
 	for k, e := range s.cache {
 		if match(k) {
 			e.value.destroy()
@@ -233,6 +331,7 @@ func (s *Service) invalidateLocked(match func(Key) bool) {
 func (s *Service) pruneLocked() {
 	for k, e := range s.cache {
 		if !time.Now().Before(e.expires) {
+			s.expired[k] = true
 			e.value.destroy()
 			delete(s.cache, k)
 		}
@@ -286,60 +385,124 @@ func (s *Service) work() {
 				s.mu.Unlock()
 				continue
 			}
-			j.State = "active"
-			s.mu.Unlock()
-			value, err := s.resolve(j.ctx, j.Key)
-			if err == nil && j.Use == "ssh-sign" {
-				private, parseErr := parseSigningKey(value, j.PublicKey)
-				clear(private)
-				if parseErr != nil {
-					err = fmt.Errorf("%w: %s", errSigningIdentity, parseErr)
-				}
-			}
-			s.mu.Lock()
-			if j.State == "active" {
-				s.pruneLocked()
-				switch {
-				case j.ctx.Err() != nil:
-					s.finishLocked(j, "op resolution canceled or timed out")
-				case err != nil:
-					// Resolver errors are untrusted and can contain credential values.
-					reason := "resolution failed; check authentication and the exact reference"
-					if errors.Is(err, errSigningIdentity) {
-						reason = err.Error()
-					}
-					var sdkErr *sdkError
-					if errors.As(err, &sdkErr) {
-						reason = sdkErr.Error()
-					}
-					s.finishLocked(j, reason)
-				case len(value) > MaxSecret || bytes.IndexByte(value, 0) >= 0:
-					s.finishLocked(j, "secret exceeds delivery limits")
-				case len(s.cache) >= 128:
-					s.finishLocked(j, "cache is full; clear a project")
-				default:
-					stored, memErr := keep(value)
-					if memErr != nil {
-						s.finishLocked(j, "secret memory unavailable")
+			jobs := []*job{j}
+			if j.startup && s.batch != nil {
+				remaining := s.queue[:0]
+				for _, next := range s.queue {
+					if next.State == "queued" && next.startup && next.Project == j.Project && next.Account == j.Account {
+						jobs = append(jobs, next)
 					} else {
-						s.cache[j.Key] = entry{stored, time.Now().Add(s.ttl), j.ID}
-						s.finishLocked(j, "")
+						remaining = append(remaining, next)
 					}
 				}
+				clear(s.queue[len(remaining):])
+				s.queue = remaining
 			}
-			clear(value)
+			for _, next := range jobs {
+				if next.startup {
+					next.cancel()
+					next.ctx, next.cancel = context.WithTimeout(s.ctx, s.timeout)
+				}
+				next.State = "active"
+			}
 			s.mu.Unlock()
+			if j.startup && s.batch != nil {
+				ctx, cancel := context.WithCancel(j.ctx)
+				stops := make([]func() bool, 0, len(jobs))
+				keys := make([]Key, 0, len(jobs))
+				for _, next := range jobs {
+					keys = append(keys, next.Key)
+					stops = append(stops, context.AfterFunc(next.ctx, cancel))
+				}
+				values, err := s.batch(ctx, keys)
+				for _, stop := range stops {
+					stop()
+				}
+				cancel()
+				if err == nil && len(values) != len(jobs) {
+					err = errors.New("invalid batch response")
+				}
+				for i, next := range jobs {
+					var value []byte
+					itemErr := err
+					if err == nil {
+						value = values[i].Value
+						if values[i].Code != 0 {
+							itemErr = &sdkError{values[i].Code}
+						}
+					}
+					s.complete(next, value, itemErr)
+				}
+				for _, value := range values {
+					clear(value.Value)
+				}
+			} else {
+				value, err := s.resolve(j.ctx, j.Key)
+				s.complete(j, value, err)
+			}
 		}
 	}
 }
 
+func (s *Service) complete(j *job, value []byte, err error) {
+	if err == nil && j.Use == "ssh-sign" {
+		private, parseErr := parseSigningKey(value, j.PublicKey)
+		clear(private)
+		if parseErr != nil {
+			err = fmt.Errorf("%w: %s", errSigningIdentity, parseErr)
+		}
+	}
+	s.mu.Lock()
+	if j.State == "active" {
+		if j.startup && s.batch != nil && (err != nil || j.ctx.Err() != nil) {
+			s.expired[j.Key] = true
+		}
+		s.pruneLocked()
+		switch {
+		case j.ctx.Err() != nil:
+			s.finishLocked(j, "op resolution canceled or timed out")
+		case err != nil:
+			// Resolver errors are untrusted and can contain credential values.
+			reason := "resolution failed; check authentication and the exact reference"
+			if errors.Is(err, errSigningIdentity) {
+				reason = err.Error()
+			}
+			var sdkErr *sdkError
+			if errors.As(err, &sdkErr) {
+				reason = sdkErr.Error()
+			}
+			s.finishLocked(j, reason)
+		case len(value) > MaxSecret || bytes.IndexByte(value, 0) >= 0:
+			s.finishLocked(j, "secret exceeds delivery limits")
+		case len(s.cache) >= 128:
+			s.finishLocked(j, "cache is full; clear a project")
+		default:
+			stored, memErr := keep(value)
+			if memErr != nil {
+				s.finishLocked(j, "secret memory unavailable")
+			} else {
+				delete(s.expired, j.Key)
+				s.cache[j.Key] = entry{stored, time.Now().Add(s.ttl), j.ID}
+				s.finishLocked(j, "")
+			}
+		}
+	}
+	clear(value)
+	s.mu.Unlock()
+}
+
 func (s *Service) trimHistoryLocked() {
 	for len(s.history) > 128 {
+		removed := false
 		for i, j := range s.history {
 			if j.State == "resolved" || j.State == "failed" {
 				s.history = slices.Delete(s.history, i, i+1)
+				removed = true
 				break
 			}
+		}
+		if !removed {
+			break
 		}
 	}
 }

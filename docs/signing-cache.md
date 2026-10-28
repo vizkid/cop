@@ -41,7 +41,8 @@ An authorized SSH signing client can use the key wherever it is trusted. Project
 Retained keys occupy locked anonymous memory; parsing and cryptographic operations create transient Go heap copies.
 Cop clears owned private buffers where possible. Complete forensic erasure of library/runtime copies is not guaranteed.
 The agent and signing code target macOS and Linux; desktop resolution requires a usable local 1Password installation.
-Topcop will later load authorized signing material into each host's memory. No networking or distribution is implemented here.
+Topcop replicates authorized signing material into enrolled cops' locked memory over Tailscale.
+Replicas preserve the original expiry and enforce signing-only use. See the README for peer admission and offline revocation limits.
 
 ## Validation
 

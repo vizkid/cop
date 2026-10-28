@@ -1,7 +1,7 @@
 //go:build cgo
 
-// cop-sdk-worker resolves one authorized field for the parent service.
-package main
+// Package desktop resolves fields in disposable daemon subprocesses.
+package desktop
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/vizkid/cop/internal/local"
 )
 
-func main() {
+func Run() {
 	if local.DisableCoreDumps() != nil {
 		os.Exit(1)
 	}
