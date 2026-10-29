@@ -77,6 +77,8 @@ See the [signing cache design](signing-cache.md).
 ## Replication
 
 Replication uses Tailscale encryption, direct Tailscale addresses, and stable node IDs from the Tailscale CLI.
+Each side checks the other's node ID when a connection opens. A replica keeps its connection to topcop open and reuses that check, because WireGuard binds a connection to one node.
+Topcop names each state with an HMAC token. The HMAC key is random and changes when copd starts, so the token reveals nothing about values.
 cop does not create Tailscale identities, change ACLs, enable Funnel, or expose the local CLI over TCP.
 
 Enrolling a peer trusts the whole machine, not one OS user on it.

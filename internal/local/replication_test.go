@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,12 +27,14 @@ type testMesh struct {
 	identities map[string]string
 }
 type testIdentity struct {
-	mesh *testMesh
-	self Node
+	mesh    *testMesh
+	self    Node
+	lookups *atomic.Int32
 }
 
 func (i testIdentity) Self(context.Context, int) (Node, error) { return i.self, nil }
 func (i testIdentity) Lookup(_ context.Context, address string) (string, error) {
+	i.lookups.Add(1)
 	i.mesh.mu.Lock()
 	defer i.mesh.mu.Unlock()
 	id := i.mesh.identities[address]
@@ -49,7 +52,7 @@ func (m *testMesh) attach(t *testing.T, s *Service, n int) *replication {
 	m.mu.Lock()
 	m.identities[node.Address] = node.ID
 	m.mu.Unlock()
-	options := ReplicationOptions{Identity: testIdentity{m, node}, Port: 8787,
+	options := ReplicationOptions{Identity: testIdentity{m, node, new(atomic.Int32)}, Port: 8787,
 		listen: func(_, address string) (net.Listener, error) {
 			l, err := net.Listen("tcp", "127.0.0.1:0")
 			if err == nil {
@@ -499,5 +502,125 @@ func TestConcurrentConnectsToCompetingGroupsKeepOneTopcop(t *testing.T) {
 	got := x.status().Topcop.ID
 	if got != p.topology.Self.ID && got != q.topology.Self.ID {
 		t.Fatalf("topcop %q is neither competing leader", got)
+	}
+}
+
+// startPoll runs the replica loop until the test ends.
+func startPoll(t *testing.T, r *replication) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); r.poll() }()
+	t.Cleanup(func() { r.service.cancel(); <-done })
+}
+func lookups(r *replication) int32 { return r.identity.(testIdentity).lookups.Load() }
+func cachedValue(s *Service, k Key) *secret {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cache[k].value
+}
+
+// pairedForPolling returns a topcop and a replica that share testKey.
+func pairedForPolling(t *testing.T) (leader, follower *Service, a, b *replication) {
+	t.Helper()
+	mesh := newMesh()
+	leader = newTestService(t, func(context.Context, Key) ([]byte, error) { return []byte(sentinel), nil }, time.Hour)
+	follower = newTestService(t, func(context.Context, Key) ([]byte, error) { return nil, errors.New("forbidden") }, time.Hour)
+	a, b = mesh.attach(t, leader, 1), mesh.attach(t, follower, 2)
+	authorize(t, leader, testKey)
+	handle(t, leader, "request", testKey)
+	connectTest(t, a, b, "local")
+	connectTest(t, b, a, "")
+	if cachedValue(follower, testKey) == nil {
+		t.Fatal("replica did not receive the value")
+	}
+	return leader, follower, a, b
+}
+
+// A waiting replica hears about a revoke at once, not on the next interval.
+func TestRevokeReachesWaitingReplicaQuickly(t *testing.T) {
+	leader, follower, _, b := pairedForPolling(t)
+	startPoll(t, b)
+	time.Sleep(200 * time.Millisecond)
+	handle(t, leader, "revoke", testKey)
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for cachedValue(follower, testKey) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("revoke did not reach the replica within 300 ms")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// An idle replica keeps one connection and does not reinstall unchanged values.
+func TestIdleReplicaKeepsConnectionAndValues(t *testing.T) {
+	_, follower, a, b := pairedForPolling(t)
+	a.mu.Lock()
+	a.pollWait = 100 * time.Millisecond
+	a.mu.Unlock()
+	startPoll(t, b)
+	time.Sleep(300 * time.Millisecond)
+	before := cachedValue(follower, testKey)
+	la, lb := lookups(a), lookups(b)
+	// Longer than the old two-second interval, so per-request checks would show.
+	time.Sleep(2500 * time.Millisecond)
+	if n := lookups(a) - la; n > 0 {
+		t.Errorf("topcop checked identity %d times while idle", n)
+	}
+	if n := lookups(b) - lb; n > 0 {
+		t.Errorf("replica checked identity %d times while idle", n)
+	}
+	if cachedValue(follower, testKey) != before {
+		t.Error("replica reinstalled unchanged values")
+	}
+}
+
+// A topcop restart makes a new token key, so the replica takes the full state again.
+func TestReplicaReinstallsAfterTopcopTokenKeyChanges(t *testing.T) {
+	leader, follower, a, b := pairedForPolling(t)
+	a.mu.Lock()
+	a.pollWait = 100 * time.Millisecond
+	a.mu.Unlock()
+	startPoll(t, b)
+	time.Sleep(300 * time.Millisecond)
+	before := cachedValue(follower, testKey)
+	leader.mu.Lock()
+	leader.tokenKey = bytes.Repeat([]byte{7}, 32)
+	leader.mu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for cachedValue(follower, testKey) == before {
+		if time.Now().After(deadline) {
+			t.Fatal("replica kept state from before the topcop restart")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A topcop from before the long poll answers at once with no token. The replica must not loop tightly.
+func TestReplicaPacesRequestsToTopcopWithoutToken(t *testing.T) {
+	_, _, _, b := pairedForPolling(t)
+	var requests atomic.Int32
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		requests.Add(1)
+		_ = json.NewEncoder(w).Encode(snapshot{Protocol: 1, Projects: map[string][]Key{}, Entries: []wireEntry{}, Expired: []Key{}})
+	})}
+	go func() { _ = server.Serve(l) }()
+	t.Cleanup(func() { _ = server.Close() })
+	old := Node{"node-9", "100.64.0.9:8787"}
+	mesh := b.identity.(testIdentity).mesh
+	mesh.mu.Lock()
+	mesh.identities[old.Address] = old.ID
+	mesh.endpoints[old.Address] = l.Addr().String()
+	mesh.mu.Unlock()
+	b.mu.Lock()
+	b.topology.Topcop = old
+	b.mu.Unlock()
+	startPoll(t, b)
+	time.Sleep(time.Second)
+	if n := requests.Load(); n > 1 {
+		t.Fatalf("replica sent %d requests in one second to a topcop without tokens", n)
 	}
 }

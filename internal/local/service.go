@@ -26,22 +26,26 @@ type job struct {
 }
 
 type Service struct {
-	mu          sync.Mutex
-	home        string
-	config      config
-	resolve     Resolver
-	batch       BatchResolver
-	ttl         time.Duration
-	timeout     time.Duration
-	cache       map[Key]entry
-	expired     map[Key]bool
-	inflight    map[Key]*job
-	queue       []*job
-	history     []*job
-	nextID      uint64
-	wake        chan struct{}
-	ctx         context.Context
-	cancel      context.CancelFunc
+	mu       sync.Mutex
+	home     string
+	config   config
+	resolve  Resolver
+	batch    BatchResolver
+	ttl      time.Duration
+	timeout  time.Duration
+	cache    map[Key]entry
+	expired  map[Key]bool
+	inflight map[Key]*job
+	queue    []*job
+	history  []*job
+	nextID   uint64
+	wake     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	// tokenKey signs state tokens for replicas; a new key per start forces a full resync.
+	tokenKey []byte
+	// changed is closed and replaced on every state change, waking waiting replicas.
+	changed     chan struct{}
 	wg          sync.WaitGroup
 	closed      bool
 	network     *replication
@@ -58,7 +62,8 @@ func New(home string, resolver Resolver, ttl, timeout time.Duration, batches ...
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{home: home, config: c, resolve: resolver, ttl: ttl, timeout: timeout,
-		cache: map[Key]entry{}, expired: map[Key]bool{}, inflight: map[Key]*job{}, wake: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+		cache: map[Key]entry{}, expired: map[Key]bool{}, inflight: map[Key]*job{}, wake: make(chan struct{}, 1), ctx: ctx, cancel: cancel,
+		tokenKey: newTokenKey(), changed: make(chan struct{})}
 	if len(batches) > 0 {
 		s.batch = batches[0]
 	}
@@ -206,6 +211,7 @@ func (s *Service) handleLocal(ctx context.Context, r Request) Result {
 	if r.Action == "revoke" {
 		s.invalidateLocked(func(k Key) bool { return k == r.Key })
 	}
+	s.notifyLocked()
 	return Result{Status: r.Action + " completed"}
 }
 
@@ -242,6 +248,7 @@ func (s *Service) fetch(ctx context.Context, k Key, deliver bool) Result {
 			}
 		}
 		s.queueAuthorizedLocked(k.Project)
+		s.notifyLocked()
 	}
 	if e, ok := s.cache[k]; ok {
 		r := delivery(e, deliver, "cached")
@@ -310,6 +317,7 @@ func (s *Service) finishLocked(j *job, reason string) {
 }
 
 func (s *Service) invalidateLocked(match func(Key) bool) {
+	defer s.notifyLocked()
 	for k := range s.expired {
 		if match(k) {
 			delete(s.expired, k)
@@ -334,6 +342,7 @@ func (s *Service) pruneLocked() {
 			s.expired[k] = true
 			e.value.destroy()
 			delete(s.cache, k)
+			s.notifyLocked()
 		}
 	}
 }
@@ -487,6 +496,7 @@ func (s *Service) complete(j *job, value []byte, err error) {
 			}
 		}
 	}
+	s.notifyLocked()
 	clear(value)
 	s.mu.Unlock()
 }

@@ -187,11 +187,12 @@ To change a setting, edit the arguments in your service file, then restart `copd
 
 A restart empties the cache. A standalone daemon or topcop then reloads every allowed field, and 1Password can ask for approval again.
 
-These limits are fixed. They are named constants in [`internal/local/types.go`](internal/local/types.go).
+These limits are fixed. They are named constants in [`internal/local`](internal/local).
 
 - The cache holds up to 128 fields of 64 KiB each.
 - Ordinary requests have a 64-job limit. Startup and refill loads queue separately.
-- A replica copies topcop's cache every two seconds.
+- A replica keeps one request open to topcop. Topcop answers when its state changes, or after 30 seconds.
+- After a failed sync, a replica retries every two seconds.
 
 References must match exactly. Query parameters and wildcards are not supported. Use account, vault, and item IDs where you can, because names can change.
 Change allowlists with the CLI. If you edit `projects.json` by hand, restart `copd`.
@@ -217,10 +218,10 @@ cop connect TOPCOP_IP:8787
 To add another machine, run `cop connect NEW_IP:8787` on any member, then `cop connect MEMBER_IP:8787` on the new machine.
 
 - The listener binds only to the Tailscale address. Without `--tailscale`, `copd` has no network listener.
-- Replicas copy the cache every two seconds. Copying never extends expiry.
+- Topcop sends a replica its new state as soon as the state changes. Copying never extends expiry.
 - A replica signs locally and serves cached fields while topcop is offline. Requests for fields it does not have go to topcop.
 - While topcop is offline, a replica cannot load new fields or change shared allowlists.
-- Clear and revoke reach a replica on its next sync. An offline replica keeps its keys until they expire.
+- Clear and revoke reach a connected replica at once. An offline replica keeps its keys until they expire.
 - On sync, topcop's allowlist replaces the joining machine's allowlist. All keys replicate, including signing keys.
 - Every member can admit machines and change shared allowlists.
 - cop refuses to merge groups with different topcops. It has no automatic failover.

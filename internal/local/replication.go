@@ -18,7 +18,8 @@ import (
 
 const maxSnapshot = 16 << 20
 
-// syncInterval is how often a replica copies topcop's cache.
+// syncInterval is how long a replica waits after a failed sync, and between
+// requests to a topcop that answers at once instead of waiting for a change.
 const syncInterval = 2 * time.Second
 
 type ReplicationOptions struct {
@@ -60,6 +61,14 @@ type replication struct {
 	dial      func(context.Context, string, string) (net.Conn, error)
 	// generation changes on every saved topology, invalidating in-flight syncs.
 	generation uint64
+	// pollWait is how long topcop holds a replica's request when nothing changes.
+	pollWait time.Duration
+	// poller keeps the connection to pollerNode open between requests.
+	poller     *http.Client
+	pollerNode Node
+	// token names the installed state; installs counts installs to order them.
+	token    string
+	installs uint64
 }
 
 type peerMessage struct {
@@ -79,6 +88,9 @@ type snapshot struct {
 	Projects map[string][]Key `json:"projects"`
 	Entries  []wireEntry      `json:"entries"`
 	Expired  []Key            `json:"expired"`
+	// Token names this state; Unchanged answers carry only the token.
+	Token     string `json:"token,omitempty"`
+	Unchanged bool   `json:"unchanged,omitempty"`
 }
 
 func (v *snapshot) erase() {
@@ -92,7 +104,7 @@ func startReplication(s *Service, options ReplicationOptions) (*replication, err
 	if err != nil {
 		return nil, err
 	}
-	r := &replication{service: s, identity: options.Identity, topology: topology{Self: self, Peers: map[string]Node{}}, done: make(chan struct{})}
+	r := &replication{service: s, identity: options.Identity, topology: topology{Self: self, Peers: map[string]Node{}}, done: make(chan struct{}), pollWait: longPollWait}
 	path := filepath.Join(s.home, "network.json")
 	if _, err := os.Lstat(path); err == nil {
 		if checkOwned(path, false) != nil {
@@ -117,7 +129,7 @@ func startReplication(s *Service, options ReplicationOptions) (*replication, err
 	if err != nil {
 		return nil, errors.New("cannot bind Tailscale listener")
 	}
-	r.server = &http.Server{Handler: http.HandlerFunc(r.serveHTTP), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 6 * time.Minute, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 8192, ErrorLog: log.New(io.Discard, "", 0)}
+	r.server = &http.Server{Handler: http.HandlerFunc(r.serveHTTP), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 6 * time.Minute, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 8192, ErrorLog: log.New(io.Discard, "", 0), ConnContext: withConnPeer}
 	go func() { defer close(r.done); _ = r.server.Serve(l) }()
 	return r, nil
 }
@@ -156,6 +168,7 @@ func (r *replication) saveLocked() error {
 		return errors.New("cannot save network configuration")
 	}
 	r.generation++
+	r.token = ""
 	return nil
 }
 func (r *replication) isReplicaLocked() bool {
@@ -167,7 +180,15 @@ func (r *replication) status() *NetworkStatus {
 	defer r.mu.Unlock()
 	return &NetworkStatus{Protocol: 1, Self: r.topology.Self, Topcop: r.topology.Topcop, Connected: r.connected || r.topology.Topcop.ID == r.topology.Self.ID, LastSync: r.lastSync, Error: r.failure}
 }
-func (r *replication) close() { _ = r.server.Close(); <-r.done }
+func (r *replication) close() {
+	_ = r.server.Close()
+	<-r.done
+	r.mu.Lock()
+	if r.poller != nil {
+		r.poller.CloseIdleConnections()
+	}
+	r.mu.Unlock()
+}
 
 // Every request uses a direct Tailscale address and checks the stable node ID.
 func (r *replication) call(ctx context.Context, node Node, path string, input, output any) error {
@@ -179,36 +200,15 @@ func (r *replication) call(ctx context.Context, node Node, path string, input, o
 	if err != nil || id != node.ID {
 		return errors.New("Tailscale peer identity changed or is unavailable")
 	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		return errors.New("invalid peer request")
-	}
-	defer clear(data)
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+node.Address+path, bytes.NewReader(data))
-	if err != nil {
-		return errors.New("invalid peer request")
-	}
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext}
 	if r.dial != nil {
 		transport.DialContext = r.dial
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		return errors.New("cop peer unavailable")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return errors.New("cop peer refused request; confirm admission and topcop selection")
-	}
-	d := json.NewDecoder(io.LimitReader(resp.Body, maxSnapshot+1))
-	if d.Decode(output) != nil || d.Decode(new(any)) != io.EOF {
-		return errors.New("invalid cop peer response")
-	}
-	return nil
+	return post(ctx, client, node, path, input, output)
 }
 func (r *replication) serveHTTP(w http.ResponseWriter, q *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -217,7 +217,7 @@ func (r *replication) serveHTTP(w http.ResponseWriter, q *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	id, err := r.identity.Lookup(q.Context(), q.RemoteAddr)
+	id, err := r.peerID(q)
 	if err != nil || id == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
@@ -226,6 +226,7 @@ func (r *replication) serveHTTP(w http.ResponseWriter, q *http.Request) {
 	top := r.topology.Topcop
 	self := r.topology.Self
 	_, admitted := r.topology.Peers[id]
+	wait := r.pollWait
 	r.mu.Unlock()
 	// Discovery returns topology metadata only, never project names or values.
 	if q.URL.Path == "/hello" {
@@ -238,7 +239,13 @@ func (r *replication) serveHTTP(w http.ResponseWriter, q *http.Request) {
 	}
 	switch q.URL.Path {
 	case "/snapshot":
-		v := r.service.snapshot()
+		// Replicas from before the long poll send null, which means "send now".
+		var poll pollRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, q.Body, 4<<10)).Decode(&poll); err != nil && err != io.EOF {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		v := r.service.waitSnapshot(q.Context(), poll.Since, wait)
 		defer v.erase()
 		_ = json.NewEncoder(w).Encode(v)
 	case "/action", "/admit":
@@ -398,6 +405,9 @@ func (r *replication) joinLocked(remote, announced Node, choice string) (*Node, 
 func (s *Service) snapshot() snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshotLocked()
+}
+func (s *Service) snapshotLocked() snapshot {
 	s.pruneLocked()
 	v := snapshot{Protocol: 1, Projects: map[string][]Key{}, Entries: []wireEntry{}, Expired: []Key{}}
 	for p, keys := range s.config.Projects {
@@ -485,51 +495,14 @@ func (s *Service) installSnapshot(v snapshot, elapsed time.Duration) error {
 	entries = nil
 	return nil
 }
+
+// sync fetches the full state now. It holds syncMu across the fetch, so a
+// waiting poll that answers meanwhile discards its older result.
 func (r *replication) sync(ctx context.Context) error {
 	r.syncMu.Lock()
 	defer r.syncMu.Unlock()
-	r.mu.Lock()
-	if !r.isReplicaLocked() {
-		r.mu.Unlock()
-		return nil
-	}
-	topcop, generation := r.topology.Topcop, r.generation
-	r.mu.Unlock()
-	start := time.Now()
-	var v snapshot
-	defer v.erase()
-	err := r.call(ctx, topcop, "/snapshot", nil, &v)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.generation != generation {
-		// The topology changed while fetching; this snapshot may come from a replaced authority.
-		return errors.New("topology changed during sync; retry")
-	}
-	if err == nil {
-		err = r.service.installSnapshot(v, time.Since(start))
-	}
-	r.connected = err == nil
-	if err != nil {
-		r.failure = "topcop sync failed; existing unexpired cache remains available"
-		return err
-	}
-	r.failure = ""
-	r.lastSync = time.Now().UTC()
-	return nil
-}
-func (r *replication) poll() {
-	ticker := time.NewTicker(syncInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.service.ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		ctx, cancel := context.WithTimeout(r.service.ctx, 10*time.Second)
-		_ = r.sync(ctx)
-		cancel()
-	}
+	_, err := r.fetch(ctx, false)
+	return err
 }
 func (r *replication) forward(ctx context.Context, request Request) Result {
 	r.mu.Lock()
