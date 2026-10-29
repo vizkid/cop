@@ -44,17 +44,17 @@ func run(args []string) error {
 	}
 	f := flag.NewFlagSet("copd", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	backend := f.String("resolver", "op", "op, sdk, or none (replica only)")
-	op := f.String("op", "op", "op executable")
+	backend := f.String("resolver", "op", "where values come from: op, sdk, or none (replica only)")
+	op := f.String("op", "op", "op executable, used with --resolver op")
 	worker := f.String("sdk-worker", "", "test override for SDK worker executable")
-	ttl := f.Duration("ttl", 7*24*time.Hour, "cache lifetime")
-	timeout := f.Duration("op-timeout", 2*time.Minute, "resolution timeout")
-	network := f.Bool("tailscale", false, "enable peer replication")
-	port := f.Int("port", 8787, "Tailscale listener port")
-	ts := f.String("tailscale-cli", "tailscale", "Tailscale executable")
+	ttl := f.Duration("ttl", 7*24*time.Hour, "how long a cached value lives; reading it does not extend it")
+	timeout := f.Duration("op-timeout", 2*time.Minute, "time limit for one 1Password load, at most 5m")
+	network := f.Bool("tailscale", false, "turn on replication over Tailscale")
+	port := f.Int("port", 8787, "replication port on the Tailscale address")
+	ts := f.String("tailscale-cli", "tailscale", "tailscale executable")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Println("copd [--resolver op|sdk|none] [--ttl 168h] [--op-timeout 2m] [--tailscale] [--port 8787]")
+			printHelp(f)
 			return nil
 		}
 		return errors.New("invalid copd options; run copd --help")
@@ -120,4 +120,25 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return local.Serve(ctx, home, resolver, *ttl, *timeout, func() { fmt.Println("cop: local service ready") }, options)
+}
+
+// printHelp lists the flags from the flag set so the help cannot drift from the code.
+// It hides --sdk-worker, which exists only for tests.
+func printHelp(f *flag.FlagSet) {
+	fmt.Println("usage: copd [options]")
+	fmt.Println("Set COP_HOME to choose the state directory.")
+	f.VisitAll(func(fl *flag.Flag) {
+		if fl.Name == "sdk-worker" {
+			return
+		}
+		name, usage := flag.UnquoteUsage(fl)
+		arg := "--" + fl.Name
+		if name != "" {
+			arg += " " + name
+		}
+		if fl.DefValue != "" && fl.DefValue != "false" {
+			usage += " (default " + fl.DefValue + ")"
+		}
+		fmt.Printf("  %-26s %s\n", arg, usage)
+	})
 }

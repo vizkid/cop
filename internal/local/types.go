@@ -9,7 +9,16 @@ import (
 	"unicode"
 )
 
-const MaxSecret = 64 << 10
+// Fixed limits. The README documents them under Settings.
+const (
+	MaxSecret = 64 << 10 // bytes in one value
+	// MaxEntries caps cached fields per daemon, keys per SDK batch, and entries per replica snapshot.
+	MaxEntries = 128
+	// MaxQueue caps ordinary loads, separately for loads in flight and loads waiting.
+	MaxQueue = 64
+	// maxHistory caps the load records that status shows.
+	maxHistory = 128
+)
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 

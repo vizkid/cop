@@ -18,6 +18,9 @@ import (
 
 const maxSnapshot = 16 << 20
 
+// syncInterval is how often a replica copies topcop's cache.
+const syncInterval = 2 * time.Second
+
 type ReplicationOptions struct {
 	Batch    BatchResolver
 	Identity Identity
@@ -410,7 +413,7 @@ func (s *Service) snapshot() snapshot {
 }
 func (s *Service) installSnapshot(v snapshot, elapsed time.Duration) error {
 	c := config{Version: 1, Projects: v.Projects}
-	if v.Protocol != 1 || c.Projects == nil || !separateSigningUses(c) || len(v.Entries) > 128 {
+	if v.Protocol != 1 || c.Projects == nil || !separateSigningUses(c) || len(v.Entries) > MaxEntries {
 		return errors.New("invalid cache snapshot")
 	}
 	allowed := map[Key]bool{}
@@ -515,7 +518,7 @@ func (r *replication) sync(ctx context.Context) error {
 	return nil
 }
 func (r *replication) poll() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(syncInterval)
 	defer ticker.Stop()
 	for {
 		select {

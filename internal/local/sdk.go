@@ -70,7 +70,7 @@ func SDKBatch(path string, args ...string) (BatchResolver, error) {
 		return nil, errors.New("SDK worker unavailable")
 	}
 	return func(ctx context.Context, keys []Key) ([]BatchValue, error) {
-		if len(keys) == 0 || len(keys) > 128 {
+		if len(keys) == 0 || len(keys) > MaxEntries {
 			return nil, errors.New("invalid SDK batch size")
 		}
 		for _, k := range keys {

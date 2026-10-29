@@ -99,7 +99,7 @@ func (p *sdkSessions) resolve(ctx context.Context, keys []Key) ([]BatchValue, er
 	defer cancel()
 	stopPool := context.AfterFunc(p.ctx, cancel)
 	defer stopPool()
-	if len(keys) == 0 || len(keys) > 128 {
+	if len(keys) == 0 || len(keys) > MaxEntries {
 		return nil, errors.New("invalid SDK batch size")
 	}
 	account := keys[0].Account

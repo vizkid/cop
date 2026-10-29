@@ -250,7 +250,7 @@ func (s *Service) fetch(ctx context.Context, k Key, deliver bool) Result {
 	}
 	j := s.inflight[k]
 	if j == nil {
-		if len(s.inflight) >= 64 || len(s.queue) >= 64 {
+		if len(s.inflight) >= MaxQueue || len(s.queue) >= MaxQueue {
 			s.mu.Unlock()
 			return Result{Error: "resolution queue is full"}
 		}
@@ -474,7 +474,7 @@ func (s *Service) complete(j *job, value []byte, err error) {
 			s.finishLocked(j, reason)
 		case len(value) > MaxSecret || bytes.IndexByte(value, 0) >= 0:
 			s.finishLocked(j, "secret exceeds delivery limits")
-		case len(s.cache) >= 128:
+		case len(s.cache) >= MaxEntries:
 			s.finishLocked(j, "cache is full; clear a project")
 		default:
 			stored, memErr := keep(value)
@@ -492,7 +492,7 @@ func (s *Service) complete(j *job, value []byte, err error) {
 }
 
 func (s *Service) trimHistoryLocked() {
-	for len(s.history) > 128 {
+	for len(s.history) > maxHistory {
 		removed := false
 		for i, j := range s.history {
 			if j.State == "resolved" || j.State == "failed" {

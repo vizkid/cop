@@ -37,7 +37,7 @@ type batchResolve func(context.Context, []string) (sdk.ResolveAllResponse, error
 type batchFactory func(context.Context, string) (batchResolve, error)
 
 func resolveBatch(ctx context.Context, keys []local.Key, create batchFactory) ([]local.BatchValue, error) {
-	if len(keys) == 0 || len(keys) > 128 {
+	if len(keys) == 0 || len(keys) > local.MaxEntries {
 		return nil, errors.New("invalid batch")
 	}
 	refs := make([]string, len(keys))

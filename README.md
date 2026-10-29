@@ -45,10 +45,55 @@ Pick how cop reads from 1Password:
 - **Desktop SDK:** turn on SDK integration in the 1Password app's Developer settings. Then run `copd --resolver sdk`.
 - **`op` CLI:** install the 1Password CLI and sign in first, because `copd` cannot answer password prompts. Then run `copd`.
 
-Keep `copd` running under a service manager, such as a launchd agent or a systemd user unit.
+Keep `copd` running under a service manager. See [Run as a service](#run-as-a-service).
 Desktop approval gives cop temporary access to the whole account. cop still checks each project's allowlist.
 
 In the examples below, set `ACCOUNT` to your 1Password account and `REF` to an exact field reference copied from 1Password.
+
+## Run as a service
+
+On macOS, save this file as `~/Library/LaunchAgents/com.example.copd.plist`. Replace `YOU` with your user name.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.example.copd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.local/bin/copd</string>
+    <string>--resolver</string><string>sdk</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+```
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.copd.plist
+```
+
+launchd does not use your shell `PATH`. If you use `--resolver op`, pass `--op` with the full path to `op`.
+
+On Linux, save this file as `~/.config/systemd/user/copd.service`:
+
+```ini
+[Unit]
+Description=cop daemon
+
+[Service]
+ExecStart=%h/.local/bin/copd
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user enable --now copd
+```
 
 ## Rex sessions
 
@@ -124,16 +169,30 @@ RSA and encrypted key files are not supported. See the [signing cache design](do
 It must be an absolute path to a real directory that you own, with no group or other permissions. Use the same `COP_HOME` for `cop` and `copd`.
 The socket is `COP_HOME/service.sock`. Unix limits socket paths to about 100 bytes, so keep `COP_HOME` short.
 
+Every other setting is a `copd` flag. `copd --help` lists them with their defaults.
+
 | `copd` flag | Default | Notes |
 | --- | --- | --- |
 | `--resolver` | `op` | `op`, `sdk`, or `none` for a replica |
-| `--ttl` | `168h` | Cache lifetime. Using a value does not extend it. |
+| `--ttl` | `168h` | Cache lifetime for every project on this daemon. Reading a value does not extend it. A replica keeps the expiry that topcop set. |
 | `--op-timeout` | `2m` | At most `5m`. Ordinary requests count queue time. Startup and refill loads count from when loading starts. |
 | `--op` | `op` on `PATH` | The `op` executable |
 | `--tailscale` | off | Turns on replication |
 | `--port` | `8787` | Replication port |
 
-The cache holds up to 128 fields of 64 KiB each. Ordinary requests have a 64-job limit. Startup and refill loads queue separately.
+To change a setting, edit the arguments in your service file, then restart `copd`:
+
+- **macOS:** `launchctl bootout gui/$(id -u)/com.example.copd`, then run the `launchctl bootstrap` command again.
+- **Linux:** `systemctl --user daemon-reload`, then `systemctl --user restart copd`.
+
+A restart empties the cache. A standalone daemon or topcop then reloads every allowed field, and 1Password can ask for approval again.
+
+These limits are fixed. They are named constants in [`internal/local/types.go`](internal/local/types.go).
+
+- The cache holds up to 128 fields of 64 KiB each.
+- Ordinary requests have a 64-job limit. Startup and refill loads queue separately.
+- A replica copies topcop's cache every two seconds.
+
 References must match exactly. Query parameters and wildcards are not supported. Use account, vault, and item IDs where you can, because names can change.
 Change allowlists with the CLI. If you edit `projects.json` by hand, restart `copd`.
 
