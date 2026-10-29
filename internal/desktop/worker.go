@@ -6,11 +6,10 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
-	"strings"
 
-	sdk "github.com/1password/onepassword-sdk-go"
 	"github.com/vizkid/cop/internal/local"
 )
 
@@ -31,27 +30,20 @@ func Run() {
 	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
 		os.Exit(1)
 	}
-	client, err := sdk.NewClient(context.Background(), sdk.WithDesktopAppIntegration(key.Account), sdk.WithIntegrationInfo("cop", "0.1.0"))
+	values, err := resolveBatch(context.Background(), []local.Key{key}, newClient)
 	if err != nil {
-		os.Exit(20)
-	}
-	value, err := client.Secrets().Resolve(context.Background(), key.Ref)
-	if err != nil {
-		if strings.Contains(err.Error(), "no vault matched the secret reference query") {
-			os.Exit(40)
-		}
-		if strings.Contains(err.Error(), "no item matched the secret reference query") {
-			os.Exit(41)
-		}
-		if strings.Contains(err.Error(), "specified field cannot be found") {
-			os.Exit(42)
+		var failure *batchError
+		if errors.As(err, &failure) {
+			os.Exit(failure.code)
 		}
 		os.Exit(1)
 	}
-	if len(value) > local.MaxSecret || strings.IndexByte(value, 0) >= 0 {
-		os.Exit(1)
+	if values[0].Code != 0 {
+		os.Exit(values[0].Code)
 	}
-	if _, err := io.WriteString(output, value); err != nil {
+	value := values[0].Value
+	defer clear(value)
+	if _, err := output.Write(value); err != nil {
 		os.Exit(1)
 	}
 }

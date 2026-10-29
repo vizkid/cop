@@ -33,6 +33,8 @@ func (e *sdkError) Error() string {
 		return "SDK could not match the item in the selected vault"
 	case 42:
 		return "SDK could not match the field in the selected item"
+	case 43:
+		return "SDK found several vaults with that name; use its verified ID"
 	default:
 		return "SDK exact-reference resolution failed"
 	}

@@ -1,6 +1,6 @@
 # Desktop Go SDK evaluation
 
-Owner: cop maintainers. Updated: 2026-10-27.
+Owner: cop maintainers. Updated: 2026-10-29.
 Status: desktop resolution verified live; optional SDK cache integration implemented.
 
 The desktop SDK is a candidate for local resolution with approval in 1Password.
@@ -9,6 +9,7 @@ A live test reached desktop approval, which the operator approved.
 A subsequent probe initialized the desktop client but reported that no vault matched the reference query.
 With operator permission, a metadata-only vault listing established a mismatch between the supplied vault label and the API title.
 Replacing that label with the observed vault ID resolved the same authorized item and field successfully.
+copd now does this itself: when the SDK reports no vault match, it lists vault titles and types once and retries with the ID of the single matching vault (`internal/desktop/batch.go`).
 The probe discarded the value without printing its contents, length, or hash.
 No item enumeration, service configuration change, or credential persistence was needed.
 

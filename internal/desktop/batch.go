@@ -34,7 +34,24 @@ func resolutionFailure(err error) error {
 }
 
 type batchResolve func(context.Context, []string) (sdk.ResolveAllResponse, error)
-type batchFactory func(context.Context, string) (batchResolve, error)
+
+// sdkClient is the part of one account's SDK client that resolution uses.
+type sdkClient struct {
+	resolve batchResolve
+	vaults  func(context.Context) ([]sdk.VaultOverview, error)
+}
+type batchFactory func(context.Context, string) (sdkClient, error)
+
+func newClient(ctx context.Context, account string) (sdkClient, error) {
+	client, err := sdk.NewClient(ctx, sdk.WithDesktopAppIntegration(account), sdk.WithIntegrationInfo("cop", "0.1.0"))
+	if err != nil {
+		return sdkClient{}, err
+	}
+	return sdkClient{
+		resolve: client.Secrets().ResolveAll,
+		vaults:  func(ctx context.Context) ([]sdk.VaultOverview, error) { return client.Vaults().List(ctx) },
+	}, nil
+}
 
 func resolveBatch(ctx context.Context, keys []local.Key, create batchFactory) ([]local.BatchValue, error) {
 	if len(keys) == 0 || len(keys) > local.MaxEntries {
@@ -47,35 +64,108 @@ func resolveBatch(ctx context.Context, keys []local.Key, create batchFactory) ([
 		}
 		refs[i] = k.Ref
 	}
-	resolve, err := create(ctx, keys[0].Account)
+	client, err := create(ctx, keys[0].Account)
 	if err != nil {
 		return nil, &batchError{20}
 	}
-	result, err := resolve(ctx, refs)
+	result, err := client.resolve(ctx, refs)
 	if err != nil {
 		return nil, resolutionFailure(err)
 	}
 	values := make([]local.BatchValue, len(keys))
 	for i, k := range keys {
-		response, ok := result.IndividualResponses[k.Ref]
-		values[i].Code = 1
-		if !ok {
-			continue
+		values[i] = batchValue(result, k.Ref)
+	}
+	retryByVaultID(ctx, client, refs, values)
+	return values, nil
+}
+
+func batchValue(result sdk.ResolveAllResponse, ref string) local.BatchValue {
+	response, ok := result.IndividualResponses[ref]
+	switch {
+	case !ok:
+	case response.Error != nil:
+		switch response.Error.Type {
+		case sdk.ResolveReferenceErrorTypeVariantVaultNotFound:
+			return local.BatchValue{Code: 40}
+		case sdk.ResolveReferenceErrorTypeVariantItemNotFound:
+			return local.BatchValue{Code: 41}
+		case sdk.ResolveReferenceErrorTypeVariantFieldNotFound:
+			return local.BatchValue{Code: 42}
 		}
-		if response.Error != nil {
-			switch response.Error.Type {
-			case sdk.ResolveReferenceErrorTypeVariantVaultNotFound:
-				values[i].Code = 40
-			case sdk.ResolveReferenceErrorTypeVariantItemNotFound:
-				values[i].Code = 41
-			case sdk.ResolveReferenceErrorTypeVariantFieldNotFound:
-				values[i].Code = 42
-			}
-		} else if response.Content != nil && len(response.Content.Secret) <= local.MaxSecret && !strings.ContainsRune(response.Content.Secret, 0) {
-			values[i] = local.BatchValue{Value: []byte(response.Content.Secret)}
+	case response.Content != nil && len(response.Content.Secret) <= local.MaxSecret && !strings.ContainsRune(response.Content.Secret, 0):
+		return local.BatchValue{Value: []byte(response.Content.Secret)}
+	}
+	return local.BatchValue{Code: 1}
+}
+
+// retryByVaultID resolves refs whose vault name the SDK could not match, using
+// the ID of the one vault with that name. The SDK does not match built-in
+// vaults such as Private or Employee by name, though op does. Values stay
+// under the ref the user allowed; only the SDK sees the ID form.
+func retryByVaultID(ctx context.Context, client sdkClient, refs []string, values []local.BatchValue) {
+	retry := map[int]string{}
+	for i, v := range values {
+		if v.Code == 40 {
+			retry[i] = ""
 		}
 	}
-	return values, nil
+	if len(retry) == 0 || client.vaults == nil {
+		return
+	}
+	vaults, err := client.vaults(ctx)
+	if err != nil {
+		return
+	}
+	var byID []string
+	for i := range retry {
+		name, rest, _ := strings.Cut(strings.TrimPrefix(refs[i], "op://"), "/")
+		id, several := matchVault(name, vaults)
+		if several {
+			values[i].Code = 43
+		}
+		if id == "" {
+			delete(retry, i)
+			continue
+		}
+		retry[i] = "op://" + id + "/" + rest
+		byID = append(byID, retry[i])
+	}
+	if len(byID) == 0 {
+		return
+	}
+	result, err := client.resolve(ctx, byID)
+	if err != nil {
+		return
+	}
+	for i, ref := range retry {
+		values[i] = batchValue(result, ref)
+	}
+}
+
+// matchVault returns the ID of the one vault the name selects. It tries the
+// exact title, then the title in any case, then the built-in personal vault.
+func matchVault(name string, vaults []sdk.VaultOverview) (id string, several bool) {
+	personal := strings.EqualFold(name, "Private") || strings.EqualFold(name, "Personal") || strings.EqualFold(name, "Employee")
+	for _, match := range []func(sdk.VaultOverview) bool{
+		func(v sdk.VaultOverview) bool { return v.Title == name },
+		func(v sdk.VaultOverview) bool { return strings.EqualFold(v.Title, name) },
+		func(v sdk.VaultOverview) bool { return personal && v.VaultType == sdk.VaultTypePersonal },
+	} {
+		var found []string
+		for _, v := range vaults {
+			if match(v) {
+				found = append(found, v.ID)
+			}
+		}
+		if len(found) == 1 {
+			return found[0], false
+		}
+		if len(found) > 1 {
+			return "", true
+		}
+	}
+	return "", false
 }
 
 func RunBatch() {
@@ -97,13 +187,7 @@ func RunBatch() {
 	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
 		os.Exit(1)
 	}
-	values, err := resolveBatch(context.Background(), keys, func(ctx context.Context, account string) (batchResolve, error) {
-		client, err := sdk.NewClient(ctx, sdk.WithDesktopAppIntegration(account), sdk.WithIntegrationInfo("cop", "0.1.0"))
-		if err != nil {
-			return nil, err
-		}
-		return client.Secrets().ResolveAll, nil
-	})
+	values, err := resolveBatch(context.Background(), keys, newClient)
 	if err != nil {
 		var failure *batchError
 		if errors.As(err, &failure) {
@@ -136,21 +220,21 @@ func RunSession() {
 		os.Exit(1)
 	}
 	var account string
-	var resolve batchResolve
-	factory := func(ctx context.Context, selected string) (batchResolve, error) {
+	var client sdkClient
+	factory := func(ctx context.Context, selected string) (sdkClient, error) {
 		if account != "" && account != selected {
-			return nil, errors.New("account changed")
+			return sdkClient{}, errors.New("account changed")
 		}
 		account = selected
-		if resolve != nil {
-			return resolve, nil
+		if client.resolve != nil {
+			return client, nil
 		}
-		client, err := sdk.NewClient(ctx, sdk.WithDesktopAppIntegration(account), sdk.WithIntegrationInfo("cop", "0.1.0"))
+		created, err := newClient(ctx, account)
 		if err != nil {
-			return nil, err
+			return sdkClient{}, err
 		}
-		resolve = client.Secrets().ResolveAll
-		return resolve, nil
+		client = created
+		return client, nil
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 8192), 1<<20)

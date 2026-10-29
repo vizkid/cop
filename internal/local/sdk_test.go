@@ -34,3 +34,11 @@ func TestSDKPipeFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestSDKVaultCodesNameTheirCause(t *testing.T) {
+	for code, want := range map[int]string{40: "could not match the vault", 43: "several vaults"} {
+		if got := (&sdkError{code}).Error(); !strings.Contains(got, want) {
+			t.Fatalf("code %d: %q", code, got)
+		}
+	}
+}

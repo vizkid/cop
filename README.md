@@ -42,7 +42,7 @@ To install the bundled agent skill for Codex and Claude, run `cop setup`. Run it
 
 Pick how cop reads from 1Password:
 
-- **Desktop SDK:** turn on SDK integration in the 1Password app's Developer settings. Then run `copd --resolver sdk`.
+- **Desktop SDK:** turn on SDK integration in the 1Password app's Developer settings. Then run `copd --resolver sdk`. Refs can name vaults by title, as with `op`. The SDK does not match built-in vaults such as Private or Employee by name, so copd looks up the vault ID and keeps your ref as written.
 - **`op` CLI:** install the 1Password CLI and sign in first, because `copd` cannot answer password prompts. Then run `copd`.
 
 Keep `copd` running under a service manager. See [Run as a service](#run-as-a-service).
