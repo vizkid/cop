@@ -1,16 +1,18 @@
 # Rex session context
 
-Owner: cop maintainers. Updated: 2026-10-28.
+Owner: cop maintainers. Updated: 2026-11-01.
 
 Inside a Rex terminal, cop selects the project from the Rex session label. This page explains how cop finds that label and when it refuses.
 
 ## What cop reads
 
-cop reads the inherited `REX_SESSION`, `REX_SERVER`, and `REX_BLOCK` variables, then asks the installed Rex CLI.
+cop reads the inherited `REX_SESSION`, `REX_BLOCK`, and `REX_SERVER` variables, then asks the installed Rex CLI.
+`REX_SERVER` is optional: Rex on Linux does not set it in panes. Without it, cop runs `rex whoami` against the Rex CLI's default server.
+That server must confirm both IDs as the caller's, and the later lookups use the endpoint it reports.
 
 | Field | Source |
 | --- | --- |
-| `project` | The exact label from `rex session inspect "$REX_SESSION" --json` |
+| `project` | The exact label for `$REX_SESSION` in `rex session ls --json --short=false`. The session must appear exactly once. |
 | `session_id` | The full Rex session ID, checked against the lookup |
 | `server_host_id` | `host_id` from `rex whoami --json` |
 | `execution_host_id` | `block.host_id` for the inherited block in that session |
@@ -29,7 +31,8 @@ cop needs the block ID to find the execution host, but never returns it or sends
 - If you rename a session, the next command uses the new label. cop does not rename or migrate the old project.
 - Two sessions with the same label share one project.
 - A label must be 1 to 64 ASCII letters, digits, underscores, or hyphens, and must start with a letter or digit. cop refuses other labels as they are. It does not trim them or change their case.
-- If any of the three variables is set, all three must be set. Missing variables, stale IDs, conflicting answers, and failed lookups are errors, even with `--project`.
+- If any of the three variables is set, `REX_SESSION` and `REX_BLOCK` must both be set. Missing IDs, stale IDs, conflicting answers, and failed lookups are errors, even with `--project`.
+- cop reads the label from the session listing, not `rex session inspect`. Inspect nests the whole split tree, and a session with many panes passes cop's JSON nesting limit of 64.
 - Rex lookups do not autostart the server, ignore `REX_CLIENT`, and have limits on time and output size.
 
 If none of the three variables is set, `cop context` reports `standalone` without running Rex. Outside Rex, every key command needs `--project`.

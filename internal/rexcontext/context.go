@@ -78,14 +78,22 @@ func Discover(ctx context.Context, env Environment, run Runner) (Context, error)
 	if !env.Present && env.Session == "" && env.Server == "" && env.Block == "" {
 		return Context{Mode: "standalone"}, nil
 	}
-	if env.Session == "" || env.Server == "" || env.Block == "" {
-		return Context{}, errors.New("incomplete Rex context: REX_SESSION, REX_SERVER, and REX_BLOCK are required")
+	// Rex on Linux sets no REX_SERVER in panes. Without it, whoami asks the
+	// Rex CLI's own default server, which must confirm both IDs as this
+	// caller's; the later lookups then use the endpoint it reports.
+	if env.Session == "" || env.Block == "" {
+		return Context{}, errors.New("incomplete Rex context: REX_SESSION and REX_BLOCK are required")
 	}
-	if !validID(env.Session, "session") || !validID(env.Block, "block") || !validEndpoint(env.Server) {
+	if !validID(env.Session, "session") || !validID(env.Block, "block") || (env.Server != "" && !validEndpoint(env.Server)) {
 		return Context{}, errors.New("malformed Rex context: use full session/block IDs and a server endpoint")
 	}
+	server := env.Server
 	query := func(target any, args ...string) error {
-		args = append([]string{"--server", env.Server, "--autostart=false", "--timeout", "3s"}, args...)
+		flags := []string{"--autostart=false", "--timeout", "3s"}
+		if server != "" {
+			flags = append([]string{"--server", server}, flags...)
+		}
+		args = append(flags, args...)
 		data, err := run(ctx, args...)
 		if err != nil {
 			return errors.New("Rex lookup failed; no standalone fallback")
@@ -110,15 +118,30 @@ func Discover(ctx context.Context, env Environment, run Runner) (Context, error)
 	if !hostID.MatchString(who.HostID) || !validEndpoint(who.Endpoint) {
 		return Context{}, errors.New("Rex server identity is missing or malformed")
 	}
-	var session struct {
-		ID    string `json:"session_id"`
-		Label string `json:"label"`
+	server = who.Endpoint
+	// The listing, not session inspect: inspect nests the whole split tree,
+	// and enough panes pass the JSON nesting limit.
+	var listing struct {
+		Sessions []struct {
+			ID    string `json:"session_id"`
+			Label string `json:"label"`
+		} `json:"sessions"`
 	}
-	if err := query(&session, "session", "inspect", env.Session, "--json"); err != nil {
+	if err := query(&listing, "session", "ls", "--json", "--short=false"); err != nil {
 		return Context{}, err
 	}
+	var session struct{ ID, Label string }
+	for _, s := range listing.Sessions {
+		if s.ID != env.Session {
+			continue
+		}
+		if session.ID != "" {
+			return Context{}, errors.New("Rex listed the session twice")
+		}
+		session.ID, session.Label = s.ID, s.Label
+	}
 	if session.ID != env.Session {
-		return Context{}, errors.New("Rex returned a different session")
+		return Context{}, errors.New("Rex did not list the session")
 	}
 	if !local.ValidProjectName(session.Label) {
 		return Context{}, errors.New("Rex session label must be a valid cop project name; no normalization is applied")

@@ -34,7 +34,7 @@ if [ -n "$REX_CLIENT" ]; then exit 91; fi
 shift 5
 case "$1" in
   whoami) cat "$FAKE_REX_DIR/who.json" ;;
-  session) if [ "$2" != inspect ] || [ "$3" != "$REX_SESSION" ]; then exit 92; fi; cat "$FAKE_REX_DIR/session.json" ;;
+  session) if [ "$2" != ls ] || [ "$3" != --json ] || [ "$4" != --short=false ]; then exit 92; fi; cat "$FAKE_REX_DIR/session.json" ;;
   block) if [ "$2" != inspect ] || [ "$3" != -s ] || [ "$4" != "$REX_SESSION" ] || [ "$5" != "$REX_BLOCK" ]; then exit 93; fi; cat "$FAKE_REX_DIR/block.json" ;;
   *) exit 94 ;;
 esac
@@ -59,7 +59,7 @@ esac
 	}
 	setContext := func(block, label string) {
 		write("who", map[string]string{"session_id": rexSession, "block_id": block, "endpoint": "unix:///tmp/rex-fixture.sock", "host_id": "server-host-account"})
-		write("session", map[string]any{"session_id": rexSession, "label": label, "clients": []any{map[string]string{"host_id": "viewer-not-execution-host"}}})
+		write("session", map[string]any{"sessions": []any{map[string]string{"session_id": rexSession, "label": label}}})
 		write("block", map[string]any{"session_id": rexSession, "block": map[string]string{"block_id": block, "host_id": "execution-host-account"}})
 	}
 	h.env = rexEnv(rexBlock)
