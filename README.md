@@ -33,7 +33,7 @@ cop version
 ```
 
 Set `PREFIX` to install somewhere else, such as `make install PREFIX=/usr/local`.
-Install `cop` and `copd` in the same directory, because `cop` starts `copd` from its own directory.
+Install `cop` and `copd` in the same directory. `cop serve`, an alias kept for older setups, runs the `copd` next to it.
 
 To install the bundled agent skill for Codex and Claude, run `cop setup`. Run it again after each upgrade.
 `cop skill show` prints the skill.
@@ -179,6 +179,7 @@ Every other setting is a `copd` flag. `copd --help` lists them with their defaul
 | `--op` | `op` on `PATH` | The `op` executable |
 | `--tailscale` | off | Turns on replication |
 | `--port` | `8787` | Replication port |
+| `--tailscale-cli` | `tailscale` on `PATH` | The `tailscale` executable. Under launchd, pass the full path. |
 
 To change a setting, edit the arguments in your service file, then restart `copd`:
 
