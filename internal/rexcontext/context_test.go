@@ -22,7 +22,9 @@ func environment() Environment {
 func responses(env Environment, label, host string) []string {
 	encode := func(v any) string { b, _ := json.Marshal(v); return string(b) }
 	return []string{
-		encode(map[string]any{"host_id": "server-account-id", "endpoint": env.Server, "session_id": env.Session, "block_id": env.Block, "account": "not-a-host-key"}),
+		// Rex always reports the test endpoint, so an explicit REX_SERVER that
+		// differs from it shows which server the later lookups use.
+		encode(map[string]any{"host_id": "server-account-id", "endpoint": endpoint, "session_id": env.Session, "block_id": env.Block, "account": "not-a-host-key"}),
 		encode(map[string]any{"sessions": []any{
 			map[string]string{"session_id": "session:99999999-9999-7999-8999-999999999999", "label": "someone-else"},
 			map[string]string{"session_id": env.Session, "label": label},
@@ -87,12 +89,13 @@ func TestSessionProjectAndExecutionHost(t *testing.T) {
 			t.Fatal("pane/viewer became context scope")
 		}
 	}
-	// Changing the endpoint does not change host identity.
+	// Changing the endpoint does not change host identity, and every lookup
+	// stays on the server the pane named, even when Rex reports another one.
 	e := environment()
 	e.Server = "https://rex.example.test"
 	c, err := Discover(context.Background(), e, fixture(t, e, responses(e, "project-alpha", "server-account-id")))
 	if err != nil || c.ServerHostID != "server-account-id" || c.ExecutionHostID != c.ServerHostID {
-		t.Fatal("endpoint used as host identity")
+		t.Fatalf("endpoint used as host identity: %v", err)
 	}
 }
 
@@ -185,8 +188,7 @@ func TestLabelChangesAreNotCachedOrNormalized(t *testing.T) {
 func TestMissingServerUsesRexDefault(t *testing.T) {
 	e := environment()
 	e.Server = ""
-	r := responses(environment(), "project-alpha", "execution-account-id")
-	c, err := Discover(context.Background(), e, fixture(t, e, r))
+	c, err := Discover(context.Background(), e, fixture(t, e, responses(e, "project-alpha", "execution-account-id")))
 	if err != nil {
 		t.Fatal(err)
 	}

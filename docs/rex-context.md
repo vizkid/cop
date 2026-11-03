@@ -1,6 +1,6 @@
 # Rex session context
 
-Owner: cop maintainers. Updated: 2026-11-01.
+Owner: cop maintainers. Updated: 2026-11-03.
 
 Inside a Rex terminal, cop selects the project from the Rex session label. This page explains how cop finds that label and when it refuses.
 
@@ -9,6 +9,7 @@ Inside a Rex terminal, cop selects the project from the Rex session label. This 
 cop reads the inherited `REX_SESSION`, `REX_BLOCK`, and `REX_SERVER` variables, then asks the installed Rex CLI.
 `REX_SERVER` is optional: Rex on Linux does not set it in panes. Without it, cop runs `rex whoami` against the Rex CLI's default server.
 That server must confirm both IDs as the caller's, and the later lookups use the endpoint it reports.
+When `REX_SERVER` is set, every lookup uses it, even if Rex reports a different endpoint.
 
 | Field | Source |
 | --- | --- |

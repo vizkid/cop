@@ -80,12 +80,12 @@ func Discover(ctx context.Context, env Environment, run Runner) (Context, error)
 	}
 	// Rex on Linux sets no REX_SERVER in panes. Without it, whoami asks the
 	// Rex CLI's own default server, which must confirm both IDs as this
-	// caller's; the later lookups then use the endpoint it reports.
+	// caller's; only then do the later lookups use the endpoint it reports.
 	if env.Session == "" || env.Block == "" {
 		return Context{}, errors.New("incomplete Rex context: REX_SESSION and REX_BLOCK are required")
 	}
 	if !validID(env.Session, "session") || !validID(env.Block, "block") || (env.Server != "" && !validEndpoint(env.Server)) {
-		return Context{}, errors.New("malformed Rex context: use full session/block IDs and a server endpoint")
+		return Context{}, errors.New("malformed Rex context: use full session/block IDs and, if set, a valid server endpoint")
 	}
 	server := env.Server
 	query := func(target any, args ...string) error {
@@ -118,7 +118,11 @@ func Discover(ctx context.Context, env Environment, run Runner) (Context, error)
 	if !hostID.MatchString(who.HostID) || !validEndpoint(who.Endpoint) {
 		return Context{}, errors.New("Rex server identity is missing or malformed")
 	}
-	server = who.Endpoint
+	// A named REX_SERVER stays in use: the endpoint Rex reports for itself
+	// may not be reachable the way the pane reached it.
+	if server == "" {
+		server = who.Endpoint
+	}
 	// The listing, not session inspect: inspect nests the whole split tree,
 	// and enough panes pass the JSON nesting limit.
 	var listing struct {
