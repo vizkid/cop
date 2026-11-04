@@ -35,6 +35,10 @@ cop version
 Set `PREFIX` to install somewhere else, such as `make install PREFIX=/usr/local`.
 Install `cop` and `copd` in the same directory. `cop serve`, an alias kept for older setups, runs the `copd` next to it.
 
+On macOS, `make app` also builds `bin/cop.app`, a background-only bundle that holds `copd`.
+Run `copd` from inside the bundle, and 1Password approval prompts show the cop badge instead of the Terminal icon. The prompt still names the process `copd`.
+`make check-app` builds the bundle and checks its plist, icon and signature.
+
 To install the bundled agent skill for Codex and Claude, run `cop setup`. Run it again after each upgrade.
 `cop skill show` prints the skill.
 
@@ -53,6 +57,7 @@ In the examples below, set `ACCOUNT` to your 1Password account and `REF` to an e
 ## Run as a service
 
 On macOS, save this file as `~/Library/LaunchAgents/com.example.copd.plist`. Replace `YOU` with your user name.
+The example runs `copd` from `cop.app`, copied to `~/.local/lib/cop/cop.app`. To run a plain `copd`, use `/Users/YOU/.local/bin/copd` instead.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -62,7 +67,7 @@ On macOS, save this file as `~/Library/LaunchAgents/com.example.copd.plist`. Rep
   <key>Label</key><string>com.example.copd</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOU/.local/bin/copd</string>
+    <string>/Users/YOU/.local/lib/cop/cop.app/Contents/MacOS/copd</string>
     <string>--resolver</string><string>sdk</string>
   </array>
   <key>RunAtLoad</key><true/>
