@@ -4,6 +4,8 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 PREFIX ?= $(HOME)/.local
 LDFLAGS := -X main.version=$(VERSION)
 APP := bin/cop.app
+# 1Password names the requester after this file, so it is a readable name.
+APP_EXE := Cop Cache
 BUNDLE_ID ?= io.github.vizkid.cop
 # v0.1.4-2-gabc1234 becomes 0.1.4; a bundle version takes digits and dots only.
 SHORT_VERSION := $(patsubst v%,%,$(firstword $(subst -, ,$(VERSION))))
@@ -29,8 +31,8 @@ app: build
 	@test "$$(uname)" = Darwin || { echo 'make app needs macOS'; exit 1; }
 	rm -rf $(APP) bin/cop.iconset
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources bin/cop.iconset
-	cp bin/copd $(APP)/Contents/MacOS/copd
-	sed -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/' -e 's/@SHORT_VERSION@/$(SHORT_VERSION)/' macos/Info.plist.in > $(APP)/Contents/Info.plist
+	cp bin/copd "$(APP)/Contents/MacOS/$(APP_EXE)"
+	sed -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/' -e 's/@SHORT_VERSION@/$(SHORT_VERSION)/' -e 's/@APP_EXE@/$(APP_EXE)/' macos/Info.plist.in > $(APP)/Contents/Info.plist
 	for size in 16 32 128 256 512; do \
 		sips -z $$size $$size docs/cop.png --out bin/cop.iconset/icon_$${size}x$${size}.png >/dev/null; \
 	done
@@ -41,13 +43,13 @@ app: build
 	rm -rf bin/cop.iconset
 	codesign --force --sign - $(APP)
 
-# Checks the macOS bundle that gives copd a name and icon in 1Password prompts.
+# Checks the macOS bundle that gives copd its name and icon in 1Password prompts.
 check-app: app
 	plutil -lint $(APP)/Contents/Info.plist
-	test "$$(plutil -extract CFBundleExecutable raw $(APP)/Contents/Info.plist)" = copd
+	test "$$(plutil -extract CFBundleExecutable raw $(APP)/Contents/Info.plist)" = "$(APP_EXE)"
 	test "$$(plutil -extract CFBundleIdentifier raw $(APP)/Contents/Info.plist)" = "$(BUNDLE_ID)"
-	test "$$(plutil -extract CFBundleName raw $(APP)/Contents/Info.plist)" = cop
+	test "$$(plutil -extract CFBundleName raw $(APP)/Contents/Info.plist)" = "$(APP_EXE)"
 	test "$$(plutil -extract LSBackgroundOnly raw $(APP)/Contents/Info.plist)" = true
 	test -s $(APP)/Contents/Resources/cop.icns
 	codesign --verify --strict --deep $(APP)
-	$(APP)/Contents/MacOS/copd --help >/dev/null
+	"$(APP)/Contents/MacOS/$(APP_EXE)" --help >/dev/null

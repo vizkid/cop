@@ -35,8 +35,9 @@ cop version
 Set `PREFIX` to install somewhere else, such as `make install PREFIX=/usr/local`.
 Install `cop` and `copd` in the same directory. `cop serve`, an alias kept for older setups, runs the `copd` next to it.
 
-On macOS, `make app` also builds `bin/cop.app`, a background-only bundle that holds `copd`.
-Run `copd` from inside the bundle, and 1Password approval prompts show the cop badge instead of the Terminal icon. The prompt still names the process `copd`.
+On macOS, `make app` also builds `bin/cop.app`, a background-only bundle that holds `copd` as `Contents/MacOS/Cop Cache`.
+Run `copd` from inside the bundle, and 1Password approval prompts show "Cop Cache" and the cop badge instead of `copd` and the Terminal icon.
+The daemon's process name is then `Cop Cache`, so look for it with `pgrep -f 'Cop Cache'`, not `pgrep -x copd`.
 `make check-app` builds the bundle and checks its plist, icon and signature.
 
 To install the bundled agent skill for Codex and Claude, run `cop setup`. Run it again after each upgrade.
@@ -67,7 +68,7 @@ The example runs `copd` from `cop.app`, copied to `~/.local/lib/cop/cop.app`. To
   <key>Label</key><string>com.example.copd</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOU/.local/lib/cop/cop.app/Contents/MacOS/copd</string>
+    <string>/Users/YOU/.local/lib/cop/cop.app/Contents/MacOS/Cop Cache</string>
     <string>--resolver</string><string>sdk</string>
   </array>
   <key>RunAtLoad</key><true/>

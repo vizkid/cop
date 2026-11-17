@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleExecutable</key><string>copd</string>
+  <key>CFBundleExecutable</key><string>@APP_EXE@</string>
   <key>CFBundleIdentifier</key><string>@BUNDLE_ID@</string>
-  <key>CFBundleName</key><string>cop</string>
-  <key>CFBundleDisplayName</key><string>cop</string>
+  <key>CFBundleName</key><string>@APP_EXE@</string>
+  <key>CFBundleDisplayName</key><string>@APP_EXE@</string>
   <key>CFBundleIconFile</key><string>cop</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
