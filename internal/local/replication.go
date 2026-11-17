@@ -414,7 +414,7 @@ func (s *Service) snapshotLocked() snapshot {
 		v.Projects[p] = append([]Key{}, keys...)
 	}
 	for k, e := range s.cache {
-		v.Entries = append(v.Entries, wireEntry{k, bytes.Clone(e.value.pages[:e.value.size]), e.expires.UTC(), time.Until(e.expires)})
+		v.Entries = append(v.Entries, wireEntry{k, bytes.Clone(e.value.pages[:e.value.size]), e.expires.UTC(), remainingLifetime(e.expires)})
 	}
 	for k := range s.expired {
 		v.Expired = append(v.Expired, k)

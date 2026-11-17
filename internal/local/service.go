@@ -336,9 +336,16 @@ func (s *Service) invalidateLocked(match func(Key) bool) {
 	}
 }
 
+// remainingLifetime enforces both elapsed time and the absolute deadline sent to replicas.
+// A host sleep or clock change must not extend either limit.
+func remainingLifetime(expires time.Time) time.Duration {
+	now := time.Now()
+	return min(expires.Sub(now), expires.UTC().Sub(now.UTC()))
+}
+
 func (s *Service) pruneLocked() {
 	for k, e := range s.cache {
-		if !time.Now().Before(e.expires) {
+		if remainingLifetime(e.expires) <= 0 {
 			s.expired[k] = true
 			e.value.destroy()
 			delete(s.cache, k)

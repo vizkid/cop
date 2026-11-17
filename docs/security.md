@@ -49,6 +49,9 @@ Multi-account routing and the full range of desktop approval states remain unver
 
 ## Loads, cancellation, and expiry
 
+Cached values expire when either their elapsed lifetime or their absolute expiry deadline passes.
+Host sleep or clock changes cannot extend either limit.
+
 - Clear and revoke cancel matching queued or active loads. A late result cannot refill the cache.
 - If the CLI disconnects, cop still finishes the accepted load, unless clear, revoke, or the deadline stops it first.
 - When an expired field is requested, cop clears the rest of that project's cache, then reloads every allowed field in the project.

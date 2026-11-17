@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -62,7 +61,7 @@ func (s *Service) sign(ctx context.Context, request Request) Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.cache[request.Key]
-	if s.closed || ctx.Err() != nil || !s.allowedLocked(request.Key) || !ok || !time.Now().Before(e.expires) {
+	if s.closed || ctx.Err() != nil || !s.allowedLocked(request.Key) || !ok || remainingLifetime(e.expires) <= 0 {
 		return Result{Error: "signing authority expired or was revoked"}
 	}
 	private, err := parseSigningKey(e.value.pages[:e.value.size], request.PublicKey)
