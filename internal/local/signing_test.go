@@ -115,7 +115,6 @@ func TestSigningRejectsWrongIdentity(t *testing.T) {
 func TestSigningReferenceCannotBecomeReadable(t *testing.T) {
 	key, value, _ := signingFixture(t)
 	defer clear(value)
-	key.Ref = "op://fixture/identity/key"
 	s := newTestService(t, func(context.Context, Key) ([]byte, error) { return bytes.Clone(value), nil }, time.Minute)
 	authorize(t, s, key)
 	readable := key

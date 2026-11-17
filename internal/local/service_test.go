@@ -265,7 +265,7 @@ func TestExpiryPrunesIdleCache(t *testing.T) {
 }
 
 func TestConfigurationAndReferenceRefusals(t *testing.T) {
-	for _, ref := range []string{"op://test/item/*", "op://test/item/token?attribute=otp", "op://test/item/private_key", "op://test/item/private%20key", "op://test/item/%00", "op://test/item/%xx", "op://test/item"} {
+	for _, ref := range []string{"op://test/item/*", "op://test/item/token?attribute=otp", "op://test/item/%00", "op://test/item/%xx", "op://test/item"} {
 		k := testKey
 		k.Ref = ref
 		if k.Validate() == nil {

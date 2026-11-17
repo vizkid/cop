@@ -61,8 +61,9 @@ A lock stops two daemons from using the same home. Configuration saves are atomi
 
 ## Readable fields and environment names
 
-cop refuses readable access to known private-key field names. Use an `ssh-sign` authorization for signing keys.
-The check matches names only. It cannot find a private key stored under another name, so authorize only ordinary fields.
+Ordinary authorizations can deliver any field, including GitHub App private keys, through `cop run`.
+Use an `ssh-sign` authorization for keys that must stay non-exportable.
+A reference authorized for `ssh-sign` cannot also have readable authorization, even across projects.
 
 Environment names use uppercase letters, digits, and underscores, and cannot start with a digit.
 cop reserves process-control names and the `OP_`, `COP_`, `REX_`, `LD_`, and `DYLD_` prefixes.

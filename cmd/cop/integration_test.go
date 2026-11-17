@@ -214,7 +214,7 @@ func localMilestone(t *testing.T, backend string) {
 		useFakeSDK(t, h)
 	}
 	h.start()
-	ref := "op://fixture/item/token"
+	ref := "op://fixture/github-app/private key"
 	h.ok("project", "create", "alpha")
 	h.ok("project", "create", "beta")
 	if len(h.view().Projects["alpha"]) != 0 {

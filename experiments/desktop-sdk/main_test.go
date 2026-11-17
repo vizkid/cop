@@ -55,7 +55,7 @@ func TestExactSelectionAndRedaction(t *testing.T) {
 func TestInvalidSelectionNeverCreatesClient(t *testing.T) {
 	for _, k := range []local.Key{
 		{Project: "example", Ref: "op://test/example/token"},
-		{Project: "example", Account: "account", Ref: "op://test/example/private key"},
+		{Project: "example", Account: "account", Ref: "op://test/example/*"},
 	} {
 		err := evaluate(context.Background(), k, func(context.Context, string) (resolveFunc, error) {
 			t.Fatal("client created for invalid request")

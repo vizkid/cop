@@ -97,9 +97,5 @@ func (k Key) Validate() error {
 			return errors.New("invalid reference component")
 		}
 	}
-	field, _ := url.PathUnescape(parts[len(parts)-1])
-	if k.Use != "ssh-sign" && strings.EqualFold(strings.ReplaceAll(field, "_", " "), "private key") {
-		return errors.New("private-key delivery is unsupported; signing is deferred")
-	}
 	return nil
 }
