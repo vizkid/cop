@@ -212,8 +212,14 @@ func TestSigningAgentAndGit(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatal("agent and Git did not share cached identity")
 	}
-	if err := RunSSH(ctx, home, authKey, "auth", []string{"/bin/sh", "-c", `eval "$GIT_SSH_COMMAND -G example.invalid" >/dev/null && test "$(git config --get gpg.ssh.program)" = false`}, nil, io.Discard, &output); err != nil {
+	var sshConfig bytes.Buffer
+	if err := RunSSH(ctx, home, authKey, "auth", []string{"/bin/sh", "-c", `eval "$GIT_SSH_COMMAND -G example.invalid" && test "$(git config --get gpg.ssh.program)" = false`}, nil, &sshConfig, &output); err != nil {
 		t.Fatalf("SSH config failed with spaced home: %v %s", err, output.String())
+	}
+	for _, setting := range []string{"serveraliveinterval 30", "serveralivecountmax 20"} {
+		if !strings.Contains("\n"+sshConfig.String(), "\n"+setting+"\n") {
+			t.Errorf("missing SSH keepalive setting %q", setting)
+		}
 	}
 	if err := RunSSH(ctx, home, key, "sign", []string{"/bin/sh", "-c", `test "$GIT_SSH_COMMAND" = false && test "$(git config --get gpg.ssh.program)" = ssh-keygen`}, nil, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)

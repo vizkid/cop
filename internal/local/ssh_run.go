@@ -130,7 +130,7 @@ func RunSSH(ctx context.Context, home string, key Key, purpose string, command [
 	child.Env = append(child.Env, "SSH_AUTH_SOCK="+socket, "GIT_SSH_VARIANT=ssh")
 	transport, signer := "false", "ssh-keygen"
 	if purpose == "auth" {
-		transport = "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityAgent=SSH_AUTH_SOCK -i " + shellQuote(identity)
+		transport = "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityAgent=SSH_AUTH_SOCK -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i " + shellQuote(identity)
 		signer = "false"
 	}
 	child.Env = append(child.Env, "GIT_SSH_COMMAND="+transport)
